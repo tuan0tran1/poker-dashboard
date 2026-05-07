@@ -1,0 +1,11 @@
+{
+  "todos": [
+    {
+      "text": "ád",
+      "completed": true,
+      "deadline": "2026-05-04T17:00:00.000Z",
+      "id": "rgUXMzMBiCc"
+    }
+  ],
+  "$schema": "./node_modules/json-server/schema.json"
+}

@@ -1,0 +1,1594 @@
+import { useEffect, useMemo, useState } from "react";
+import { formatCurrency } from "../utils/finance";
+
+const JPBT_STORAGE_KEY = "jpbt-workspace-v1";
+const SUB_TABS = ["Điểm danh", "Rebuys", "Rank", "Profit", "Tổng kết", "Bounty", "Jackpot", "Thống kê top", "Settings"];
+const TAB_LABEL_MIGRATIONS = {
+    "Diem danh": "Điểm danh",
+    "Tong ket": "Tổng kết",
+    "Thong ke top": "Thống kê top"
+};
+const DEFAULT_ROUNDS = 11;
+const JACKPOT_TYPES = [
+    { key: "Tu Quy", percent: 0.4 },
+    { key: "TPS", percent: 0.7 },
+    { key: "Bad Beat", percent: 1 },
+    { key: "Royal Flush", percent: 1 }
+];
+
+function createRows(players, count = DEFAULT_ROUNDS) {
+    return Array.from({ length: count }, (_, index) => ({
+        round: index + 1,
+        date: "",
+        attendance: Object.fromEntries(players.map((player) => [player.id, false])),
+        rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
+        rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
+        profit: Object.fromEntries(players.map((player) => [player.id, ""])),
+        bounty: Object.fromEntries(players.map((player) => [player.id, ""])),
+        bountyPot: "",
+        jackpotContrib: Object.fromEntries(players.map((player) => [player.id, ""])),
+        jackpotInOut: ""
+    }));
+}
+
+function createDefaultRankPoints(count) {
+    return Object.fromEntries(
+        Array.from({ length: count }, (_, idx) => {
+            const rank = idx + 1;
+            if (rank === 1) return [rank, 6];
+            if (rank === 2) return [rank, 4];
+            if (rank === 3) return [rank, 3];
+            if (rank === 4) return [rank, 2];
+            if (rank === 5) return [rank, 1];
+            return [rank, 0];
+        })
+    );
+}
+
+function isLegacyLinearRankPoints(rankPoints, count) {
+    if (!rankPoints) return false;
+    return Array.from({ length: count }, (_, idx) => idx + 1).every(
+        (rank) => Number(rankPoints[rank] ?? NaN) === Math.max(count - (rank - 1), 0)
+    );
+}
+
+function isPreviousSampleRankPoints(rankPoints, count) {
+    if (!rankPoints) return false;
+    return Array.from({ length: count }, (_, idx) => idx + 1).every((rank) => {
+        if (rank === 1) return Number(rankPoints[rank] ?? NaN) === 6;
+        if (rank === 2) return Number(rankPoints[rank] ?? NaN) === 4;
+        if (rank === 3) return Number(rankPoints[rank] ?? NaN) === 3;
+        if (rank === 4) return Number(rankPoints[rank] ?? NaN) === 2;
+        if (rank === 5) return Number(rankPoints[rank] ?? NaN) === 1;
+        return Number(rankPoints[rank] ?? NaN) === 0;
+    });
+}
+
+function createDefaultSettings(players) {
+    return {
+        buyIn: 200000,
+        jackpot: 10000,
+        bounty: 10000,
+        jackpotTotalOverride: null,
+        rankPoints: createDefaultRankPoints(players.length),
+        rankPointsCustomized: false,
+        blindLevels: [
+            { id: 1, level: 1, blind: "10/20", duration: "20'", note: "" },
+            { id: 2, level: 2, blind: "20/40", duration: "20'", note: "" },
+            { id: 3, level: 3, blind: "30/60", duration: "20'", note: "" },
+            { id: 4, level: 4, blind: "40/80", duration: "20'", note: "" },
+            { id: 5, level: 5, blind: "60/120", duration: "20'", note: "" },
+            { id: 6, level: 6, blind: "100/200", duration: "10'", note: "" },
+            { id: 7, level: 7, blind: "150/300", duration: "10'", note: "" },
+            { id: 8, level: 8, blind: "200/400", duration: "10'", note: "Ko rebuy" }
+        ]
+    };
+}
+
+function defaultNotes() {
+    return Object.fromEntries(SUB_TABS.map((tab) => [tab, ""]));
+}
+
+function normalizeNotes(notes) {
+    const nextNotes = defaultNotes();
+    Object.entries(notes ?? {}).forEach(([key, value]) => {
+        const nextKey = TAB_LABEL_MIGRATIONS[key] ?? key;
+        if (Object.hasOwn(nextNotes, nextKey)) {
+            nextNotes[nextKey] = value;
+        }
+    });
+    return nextNotes;
+}
+
+function rankOptions(count) {
+    return ["NA", ...Array.from({ length: count }, (_, i) => `Top ${i + 1}`)];
+}
+
+function rankColorClass(rank) {
+    const rankNumber = Number(String(rank).replace("Top ", ""));
+    if (!Number.isFinite(rankNumber)) return "";
+    if (rankNumber <= 3) return `rank-top-${rankNumber}`;
+    return "rank-top-other";
+}
+
+function normalizeBlindLevels(levels) {
+    if (!Array.isArray(levels)) return [];
+    return levels.map((item, index) => ({
+        id: item.id ?? index + 1,
+        level: Number(item.level ?? index + 1),
+        blind: item.blind ?? "",
+        duration: item.duration ?? "",
+        note: item.note ?? ""
+    }));
+}
+
+async function copyTextToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+}
+
+function downloadJson(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
+function normalizeRows(rows) {
+    return rows.map((row, index) => ({ ...row, round: index + 1 }));
+}
+
+function withPlayerKeys(rows, players) {
+    return rows.map((row) => ({
+        ...row,
+        attendance: Object.fromEntries(players.map((p) => [p.id, Boolean(row.attendance?.[p.id])])),
+        rebuys: Object.fromEntries(
+            players.map((p) => [p.id, Boolean(row.attendance?.[p.id]) && Boolean(row.rebuys?.[p.id])])
+        ),
+        rank: Object.fromEntries(players.map((p) => [p.id, row.rank?.[p.id] ?? "NA"])),
+        profit: Object.fromEntries(players.map((p) => [p.id, row.profit?.[p.id] ?? ""])),
+        bounty: Object.fromEntries(players.map((p) => [p.id, row.bounty?.[p.id] ?? ""])),
+        jackpotContrib: Object.fromEntries(players.map((p) => [p.id, row.jackpotContrib?.[p.id] ?? ""])),
+        bountyPot: row.bountyPot ?? "",
+        jackpotInOut: row.jackpotInOut ?? ""
+    }));
+}
+
+export default function JPBTPage({ players: seedPlayers }) {
+    const [initialData] = useState(() => {
+        const defaultPlayers = seedPlayers.map((p) => ({ id: p.id, name: p.name }));
+        const defaultRows = createRows(defaultPlayers);
+        const defaultSettings = createDefaultSettings(defaultPlayers);
+        const raw = localStorage.getItem(JPBT_STORAGE_KEY);
+        if (!raw) return { players: defaultPlayers, rows: defaultRows, settings: defaultSettings, notes: defaultNotes(), jackpotWins: [] };
+        try {
+            const parsed = JSON.parse(raw);
+            const players = Array.isArray(parsed.players) && parsed.players.length > 0 ? parsed.players : defaultPlayers;
+            const rows = Array.isArray(parsed.rows) ? normalizeRows(withPlayerKeys(parsed.rows, players)) : defaultRows;
+            const parsedRankPoints = parsed.settings?.rankPoints;
+            const rankPointsCustomized = Boolean(parsed.settings?.rankPointsCustomized);
+            const defaultRankPoints = createDefaultRankPoints(players.length);
+            const shouldMigrateRankPoints =
+                !rankPointsCustomized &&
+                (isLegacyLinearRankPoints(parsedRankPoints, players.length) ||
+                    isPreviousSampleRankPoints(parsedRankPoints, players.length));
+            const nextRankPoints = shouldMigrateRankPoints
+                ? defaultRankPoints
+                : Object.fromEntries(
+                      players.map((_, idx) => [idx + 1, parsedRankPoints?.[idx + 1] ?? defaultRankPoints[idx + 1]])
+                  );
+            return {
+                players,
+                rows,
+                settings: {
+                    ...(parsed.settings ?? defaultSettings),
+                    rankPoints: nextRankPoints,
+                    rankPointsCustomized,
+                    jackpotTotalOverride:
+                        parsed.settings?.jackpotTotalOverride ?? defaultSettings.jackpotTotalOverride,
+                    blindLevels: normalizeBlindLevels(
+                        parsed.settings?.blindLevels ?? defaultSettings.blindLevels
+                    )
+                },
+                notes: normalizeNotes(parsed.notes),
+                jackpotWins: Array.isArray(parsed.jackpotWins) ? parsed.jackpotWins : []
+            };
+        } catch {
+            return { players: defaultPlayers, rows: defaultRows, settings: defaultSettings, notes: defaultNotes(), jackpotWins: [] };
+        }
+    });
+
+    const [subTab, setSubTab] = useState("Điểm danh");
+    const [players, setPlayers] = useState(initialData.players);
+    const [rows, setRows] = useState(initialData.rows);
+    const [settings, setSettings] = useState(initialData.settings);
+    const [notes, setNotes] = useState(initialData.notes);
+    const [jackpotWins, setJackpotWins] = useState(initialData.jackpotWins);
+    const [newPlayerName, setNewPlayerName] = useState("");
+    const [editingPlayerId, setEditingPlayerId] = useState(null);
+    const [editingPlayerName, setEditingPlayerName] = useState("");
+    const [blindLevelError, setBlindLevelError] = useState("");
+    const [toast, setToast] = useState(null);
+    const [jackpotTotalInput, setJackpotTotalInput] = useState(
+        String(initialData.settings?.jackpotTotalOverride ?? "")
+    );
+
+    useEffect(() => {
+        if (!toast) return undefined;
+        const timeoutId = window.setTimeout(() => setToast(null), 4500);
+        return () => window.clearTimeout(timeoutId);
+    }, [toast]);
+
+    const showToast = (message, type = "info") => {
+        setToast({ message, type });
+    };
+
+    useEffect(() => {
+        localStorage.setItem(JPBT_STORAGE_KEY, JSON.stringify({ players, rows, settings, notes, jackpotWins }));
+    }, [players, rows, settings, notes, jackpotWins]);
+
+    const syncRowsWithPlayers = (nextPlayers) => {
+        setRows((prev) => withPlayerKeys(prev, nextPlayers));
+        setSettings((prev) => ({
+            ...prev,
+            rankPoints: Object.fromEntries(
+                nextPlayers.map((_, idx) => [idx + 1, prev.rankPoints?.[idx + 1] ?? createDefaultRankPoints(nextPlayers.length)[idx + 1]])
+            )
+        }));
+        setJackpotWins((prev) =>
+            prev
+                .map((row) => ({
+                    ...row,
+                    winnerId: nextPlayers.some((player) => player.id === row.winnerId) ? row.winnerId : ""
+                }))
+        );
+    };
+
+    const updateRow = (round, updater) => {
+        setRows((prev) => prev.map((row) => (row.round === round ? updater(row) : row)));
+    };
+
+    const selectAllAttendance = (round) => {
+        updateRow(round, (row) => ({
+            ...row,
+            attendance: Object.fromEntries(players.map((player) => [player.id, true])),
+            rank: Object.fromEntries(players.map((player) => [player.id, row.rank?.[player.id] ?? "NA"]))
+        }));
+    };
+
+    const clearAllAttendance = (round) => {
+        updateRow(round, (row) => ({
+            ...row,
+            attendance: Object.fromEntries(players.map((player) => [player.id, false])),
+            rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
+            rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
+            bounty: Object.fromEntries(players.map((player) => [player.id, ""])),
+            jackpotContrib: Object.fromEntries(players.map((player) => [player.id, ""]))
+        }));
+    };
+
+    const addRound = () => {
+        setRows((prev) => [
+            ...prev,
+            {
+                round: prev.length + 1,
+                date: "",
+                attendance: Object.fromEntries(players.map((player) => [player.id, false])),
+                rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
+                rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
+                profit: Object.fromEntries(players.map((player) => [player.id, ""])),
+                bounty: Object.fromEntries(players.map((player) => [player.id, ""])),
+                bountyPot: "",
+                jackpotContrib: Object.fromEntries(players.map((player) => [player.id, ""])),
+                jackpotInOut: ""
+            }
+        ]);
+    };
+
+    const deleteRound = (round) => {
+        setRows((prev) => {
+            if (prev.length <= 1) return prev;
+            return normalizeRows(prev.filter((row) => row.round !== round));
+        });
+    };
+
+    const getSummaryText = () =>
+        [
+            ["Người chơi", "Pts", "Ses", "Rb", "Buy-in", "Prize", "Jackpot", "Bounty", "Net"].join("\t"),
+            ...summary.players.map((row) =>
+                [
+                    row.playerName,
+                    row.points,
+                    row.sessions,
+                    row.rebuys,
+                    Math.round(row.buyIn),
+                    Math.round(row.prize),
+                    Math.round(row.jackpot),
+                    Math.round(row.bounty),
+                    Math.round(row.net)
+                ].join("\t")
+            ),
+            "",
+            ["Check", Math.round(summary.check)].join("\t"),
+            ["Tổng prize", Math.round(summary.totalPrize)].join("\t"),
+            ["Tổng điểm", summary.totalPoints].join("\t")
+        ].join("\n");
+
+    const validateDataBeforeSummaryAction = () => {
+        if (dataIssues.length === 0) return true;
+        const preview = dataIssues.slice(0, 5).map((issue) => `- ${issue.message}`).join("\n");
+        const more = dataIssues.length > 5 ? `\n...và ${dataIssues.length - 5} lỗi khác.` : "";
+        showToast(`Còn ${dataIssues.length} lỗi dữ liệu. Vui lòng sửa trước khi copy/reset:\n\n${preview}${more}`, "error");
+        return false;
+    };
+
+    const copySummary = async () => {
+        if (!validateDataBeforeSummaryAction()) return;
+        try {
+            await copyTextToClipboard(getSummaryText());
+            showToast("Đã copy bảng Tổng kết.");
+        } catch {
+            showToast("Không thể copy bảng Tổng kết.", "error");
+        }
+    };
+
+    const resetWorkspace = () => {
+        if (!validateDataBeforeSummaryAction()) return;
+        const confirmed = window.confirm("Reset dữ liệu chơi? Phần Settings sẽ được giữ nguyên.");
+        if (!confirmed) return;
+        downloadJson(`jpbt-auto-backup-before-reset-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, getBackupData());
+        setRows(createRows(players));
+        setNotes((prev) => ({ ...defaultNotes(), Settings: prev.Settings ?? "" }));
+        setJackpotWins([]);
+        setJackpotTotalInput(String(settings.jackpotTotalOverride ?? ""));
+        showToast("Đã auto-backup và reset dữ liệu chơi.");
+    };
+
+    const getBackupData = () => ({
+            type: "jpbt",
+            exportedAt: new Date().toISOString(),
+            players,
+            rows,
+            settings,
+            notes,
+            jackpotWins
+    });
+
+    const exportBackup = () => {
+        downloadJson(`jpbt-backup-${new Date().toISOString().slice(0, 10)}.json`, getBackupData());
+        showToast("Đã export backup JSON.");
+    };
+
+    const importBackup = async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        if (!file) return;
+
+        try {
+            const imported = JSON.parse(await file.text());
+            const nextPlayers = Array.isArray(imported.players) && imported.players.length > 0 ? imported.players : players;
+            const defaultSettings = createDefaultSettings(nextPlayers);
+            const parsedRankPoints = imported.settings?.rankPoints;
+            const nextSettings = {
+                ...defaultSettings,
+                ...(imported.settings ?? {}),
+                rankPoints: Object.fromEntries(
+                    nextPlayers.map((_, idx) => [
+                        idx + 1,
+                        parsedRankPoints?.[idx + 1] ?? defaultSettings.rankPoints[idx + 1]
+                    ])
+                ),
+                rankPointsCustomized: Boolean(imported.settings?.rankPointsCustomized),
+                jackpotTotalOverride:
+                    imported.settings?.jackpotTotalOverride ?? defaultSettings.jackpotTotalOverride,
+                blindLevels: normalizeBlindLevels(imported.settings?.blindLevels ?? defaultSettings.blindLevels)
+            };
+            downloadJson(`jpbt-auto-backup-before-import-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, getBackupData());
+            setPlayers(nextPlayers);
+            setRows(
+                Array.isArray(imported.rows)
+                    ? normalizeRows(withPlayerKeys(imported.rows, nextPlayers))
+                    : createRows(nextPlayers)
+            );
+            setSettings(nextSettings);
+            setNotes(normalizeNotes(imported.notes));
+            setJackpotWins(Array.isArray(imported.jackpotWins) ? imported.jackpotWins : []);
+            setJackpotTotalInput(String(nextSettings.jackpotTotalOverride ?? ""));
+            showToast("Đã auto-backup và import JSON.");
+        } catch {
+            showToast("File backup JSON không hợp lệ.", "error");
+        }
+    };
+
+    const addPlayer = () => {
+        const name = newPlayerName.trim();
+        if (!name) return;
+        const next = [...players, { id: (players.at(-1)?.id ?? 0) + 1, name }];
+        setPlayers(next);
+        syncRowsWithPlayers(next);
+        setNewPlayerName("");
+    };
+
+    const deletePlayer = (playerId) => {
+        const next = players.filter((player) => player.id !== playerId);
+        if (next.length === 0) return;
+        setPlayers(next);
+        syncRowsWithPlayers(next);
+    };
+
+    const savePlayerName = (playerId) => {
+        const name = editingPlayerName.trim();
+        if (!name) return;
+        const next = players.map((player) => (player.id === playerId ? { ...player, name } : player));
+        setPlayers(next);
+        syncRowsWithPlayers(next);
+        setEditingPlayerId(null);
+    };
+
+    const hasDuplicateLevel = (blindLevels, level, currentId) =>
+        blindLevels.some((item) => item.id !== currentId && Number(item.level) === Number(level));
+
+    const addBlindLevel = () => {
+        setSettings((prev) => {
+            const nextLevel = (prev.blindLevels.at(-1)?.level ?? 0) + 1;
+            const nextId = (prev.blindLevels.at(-1)?.id ?? 0) + 1;
+            return {
+                ...prev,
+                blindLevels: [...prev.blindLevels, { id: nextId, level: nextLevel, blind: "", duration: "10'", note: "" }]
+            };
+        });
+    };
+
+    const updateBlindLevel = (id, patch) => {
+        setSettings((prev) => {
+            if (Object.hasOwn(patch, "level")) {
+                const nextLevel = Number(patch.level);
+                if (hasDuplicateLevel(prev.blindLevels, nextLevel, id)) {
+                    setBlindLevelError(`Level ${nextLevel} đã tồn tại. Vui lòng chọn level khác.`);
+                    return prev;
+                }
+            }
+            setBlindLevelError("");
+            return {
+                ...prev,
+                blindLevels: prev.blindLevels.map((item) => (item.id === id ? { ...item, ...patch } : item))
+            };
+        });
+    };
+
+    const profitByRound = useMemo(() => {
+        const baseAmount =
+            Number(settings.buyIn || 0) -
+            Number(settings.jackpot || 0) -
+            Number(settings.bounty || 0);
+
+        return Object.fromEntries(
+            rows.map((row) => {
+                const attendeeCount = players.filter((player) => row.attendance?.[player.id]).length;
+                const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
+                const participantPool = attendeeCount * baseAmount;
+                const rebuyPool = rebuyCount * baseAmount;
+                const pool = participantPool + rebuyPool;
+
+                const pointsByPlayer = Object.fromEntries(
+                    players.map((player) => {
+                        const rank = row.rank?.[player.id] ?? "NA";
+                        if (!row.attendance?.[player.id] || rank === "NA") {
+                            return [player.id, 0];
+                        }
+                        const rankNumber = Number(rank.replace("Top ", ""));
+                        return [player.id, Number(settings.rankPoints[rankNumber] ?? 0)];
+                    })
+                );
+                const totalPoints = Object.values(pointsByPlayer).reduce((sum, point) => sum + point, 0);
+
+                const byPlayer = Object.fromEntries(
+                    players.map((player) => {
+                        const joinedAttendance = Boolean(row.attendance?.[player.id]);
+                        const joinedRebuy = Boolean(row.rebuys?.[player.id]);
+                        if (!joinedAttendance) {
+                            return [player.id, ""];
+                        }
+                        const playerPoints = pointsByPlayer[player.id] ?? 0;
+                        const winAmount = totalPoints > 0 ? (pool * playerPoints) / totalPoints : 0;
+                        const totalCost = baseAmount + (joinedRebuy ? baseAmount : 0);
+                        return [player.id, winAmount - totalCost];
+                    })
+                );
+
+                return [row.round, byPlayer];
+            })
+        );
+    }, [players, rows, settings.buyIn, settings.jackpot, settings.bounty, settings.rankPoints]);
+
+    const dataIssues = useMemo(() => {
+        return rows.flatMap((row) => {
+            const attendees = players.filter((player) => row.attendance?.[player.id]);
+            if (attendees.length === 0) return [];
+
+            const issues = [];
+            const missingRankPlayers = attendees.filter((player) => (row.rank?.[player.id] ?? "NA") === "NA");
+            if (missingRankPlayers.length > 0) {
+                issues.push({
+                    key: `${row.round}-missing-rank`,
+                    message: `Lần chơi ${row.round}: ${missingRankPlayers.map((player) => player.name).join(", ")} đã điểm danh nhưng chưa chọn rank.`
+                });
+            }
+
+            const ranksByValue = new Map();
+            attendees.forEach((player) => {
+                const rank = row.rank?.[player.id] ?? "NA";
+                if (rank === "NA") return;
+                ranksByValue.set(rank, [...(ranksByValue.get(rank) ?? []), player.name]);
+            });
+            Array.from(ranksByValue.entries())
+                .filter(([, names]) => names.length > 1)
+                .forEach(([rank, names]) => {
+                    issues.push({
+                        key: `${row.round}-duplicate-${rank}`,
+                        message: `Lần chơi ${row.round}: ${rank} bị trùng cho ${names.join(", ")}.`
+                    });
+                });
+
+            const profitTotal = players.reduce((sum, player) => {
+                const value = profitByRound[row.round]?.[player.id];
+                const amount = Number(value);
+                return Number.isFinite(amount) ? sum + amount : sum;
+            }, 0);
+            if (Math.abs(profitTotal) > 1) {
+                issues.push({
+                    key: `${row.round}-profit-balance`,
+                    message: `Lần chơi ${row.round}: tổng profit đang lệch ${formatCurrency(profitTotal)}.`
+                });
+            }
+
+            return issues;
+        });
+    }, [players, rows, profitByRound]);
+
+    const deleteBlindLevel = (id) => {
+        setSettings((prev) => {
+            if (prev.blindLevels.length <= 1) return prev;
+            return { ...prev, blindLevels: prev.blindLevels.filter((item) => item.id !== id) };
+        });
+    };
+
+    const addJackpotWin = () => {
+        setJackpotWins((prev) => [
+            ...prev,
+            { id: (prev.at(-1)?.id ?? 0) + 1, round: 1, winnerId: players[0]?.id ?? "", type: "Tu Quy", amount: 0 }
+        ]);
+    };
+
+    const updateJackpotWin = (id, patch) => {
+        setJackpotWins((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+    };
+
+    const deleteJackpotWin = (id) => {
+        setJackpotWins((prev) => prev.filter((item) => item.id !== id));
+    };
+
+    const summary = useMemo(() => {
+        const baseAmount =
+            Number(settings.buyIn || 0) -
+            Number(settings.jackpot || 0) -
+            Number(settings.bounty || 0);
+        const rankCount = Object.fromEntries(players.map((player) => [player.id, Object.fromEntries(players.map((_, idx) => [idx + 1, 0]))]));
+        const totalRank = Object.fromEntries(players.map((player) => [player.id, 0]));
+        const totalRankRound = Object.fromEntries(players.map((player) => [player.id, 0]));
+        const totalProfit = Object.fromEntries(players.map((player) => [player.id, 0]));
+        const bountyTotal = Object.fromEntries(players.map((player) => [player.id, 0]));
+        const jackpotTotal = Object.fromEntries(players.map((player) => [player.id, 0]));
+
+        const koMoneyByRound = Object.fromEntries(
+            rows.map((row) => {
+                if (!row.date) {
+                    return [row.round, ""];
+                }
+                const attendanceCount = players.filter((player) => row.attendance?.[player.id]).length;
+                const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
+                const koMoney =
+                    attendanceCount > 1
+                        ? ((attendanceCount + rebuyCount) / (attendanceCount - 1)) * Number(settings.bounty || 0)
+                        : 0;
+                return [row.round, koMoney];
+            })
+        );
+
+        rows.forEach((row) => {
+            players.forEach((player) => {
+                const pid = player.id;
+                const rank = row.rank?.[pid] ?? "NA";
+                if (rank !== "NA") {
+                    const rankNumber = Number(rank.replace("Top ", ""));
+                    if (rankNumber >= 1) {
+                        rankCount[pid][rankNumber] += 1;
+                        totalRank[pid] += rankNumber;
+                        totalRankRound[pid] += 1;
+                    }
+                }
+                const p = Number(profitByRound[row.round]?.[pid] ?? 0);
+                if (!Number.isNaN(p)) totalProfit[pid] += p;
+                const koCount = Number(row.bounty?.[pid] ?? 0);
+                if (!Number.isNaN(koCount) && row.attendance?.[pid]) {
+                    bountyTotal[pid] += koCount * (koMoneyByRound[row.round] ?? 0);
+                }
+                const j = Number(row.jackpotContrib?.[pid] ?? 0);
+                if (!Number.isNaN(j)) jackpotTotal[pid] += j;
+            });
+        });
+
+        jackpotWins.forEach((item) => {
+            const value = Number(item.amount ?? 0);
+            if (!Number.isNaN(value) && item.winnerId) {
+                jackpotTotal[item.winnerId] += value;
+            }
+        });
+
+        const playerRows = players.map((player) => {
+            const pid = player.id;
+            const sessions = rows.filter((row) => row.attendance?.[pid]).length;
+            const rebuys = rows.filter((row) => row.rebuys?.[pid]).length;
+            const points = rows.reduce((sum, row) => {
+                const rank = row.rank?.[pid] ?? "NA";
+                if (rank === "NA") return sum;
+                const rankNumber = Number(rank.replace("Top ", ""));
+                return sum + (settings.rankPoints[rankNumber] ?? 0);
+            }, 0);
+            const entries = sessions + rebuys;
+            const buyIn = entries * Number(settings.buyIn || 0);
+            const prizePoolContribution = entries * baseAmount;
+            return {
+                playerId: pid,
+                playerName: player.name,
+                points,
+                sessions,
+                rebuys,
+                entries,
+                buyIn,
+                prizePoolContribution,
+                prize: 0,
+                jackpot: jackpotTotal[pid],
+                bounty: bountyTotal[pid],
+                rawProfit: totalProfit[pid],
+                topStats: rankCount[pid],
+                avgRank: totalRankRound[pid] > 0 ? totalRank[pid] / totalRankRound[pid] : 0
+            };
+        });
+
+        const totalPrize = playerRows.reduce((sum, row) => sum + row.prizePoolContribution, 0);
+        const totalPoints = playerRows.reduce((sum, row) => sum + row.points, 0);
+
+        const withPrize = playerRows.map((row) => {
+            const prize = row.prizePoolContribution;
+            const net = row.rawProfit + row.bounty + row.jackpot + prize - row.buyIn;
+            return {
+                ...row,
+                prize,
+                net
+            };
+        });
+
+        const check = withPrize.reduce((sum, row) => sum + row.net, 0);
+        return { players: withPrize, totalPrize, totalPoints, check, koMoneyByRound };
+    }, [players, rows, settings, jackpotWins, profitByRound]);
+
+    const jackpotTotalContribAuto = useMemo(
+        () =>
+            rows.reduce(
+                (sum, row) =>
+                    sum +
+                    (players.filter((player) => row.attendance?.[player.id]).length +
+                        players.filter((player) => row.rebuys?.[player.id]).length) *
+                        Number(settings.jackpot || 0),
+                0
+            ),
+        [rows, players, settings.jackpot]
+    );
+    const jackpotTotalContrib =
+        settings.jackpotTotalOverride === null
+            ? jackpotTotalContribAuto
+            : Number(settings.jackpotTotalOverride);
+    const jackpotPaid = useMemo(
+        () => jackpotWins.reduce((sum, item) => sum + Number(item.amount ?? 0), 0),
+        [jackpotWins]
+    );
+    const jackpotRemain = jackpotTotalContrib - jackpotPaid;
+
+    const noteBox = (
+        <div className="editor-block">
+            <h3>Note - {subTab}</h3>
+            <textarea
+                className="note-input"
+                rows={3}
+                value={notes[subTab] ?? ""}
+                onChange={(e) => setNotes((prev) => ({ ...prev, [subTab]: e.target.value }))}
+                placeholder="Ghi chú cho phần này..."
+            />
+        </div>
+    );
+
+    return (
+        <div className="stack">
+            {toast && (
+                <div className={`toast toast-${toast.type}`}>
+                    {toast.message}
+                </div>
+            )}
+
+            <div className="tab-row">
+                {SUB_TABS.map((name) => (
+                    <button
+                        key={name}
+                        className={subTab === name ? "tab tab-active" : "tab"}
+                        onClick={() => setSubTab(name)}
+                    >
+                        {name}
+                    </button>
+                ))}
+            </div>
+
+            {dataIssues.length > 0 && (
+                <details className="card data-issues">
+                    <summary>Có {dataIssues.length} lỗi dữ liệu</summary>
+                    <ul>
+                        {dataIssues.map((issue) => (
+                            <li className="error-text" key={issue.key}>{issue.message}</li>
+                        ))}
+                    </ul>
+                </details>
+            )}
+
+            {subTab === "Điểm danh" && (
+                <div className="card">
+                    <h2>Điểm danh</h2>
+                    <div className="row-actions">
+                        <button className="btn btn-primary" onClick={addRound}>Thêm lần chơi</button>
+                    </div>
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                <th>Chọn nhanh</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
+                                <th>Date</th>
+                                <th>Xóa</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((row) => (
+                                <tr key={row.round}>
+                                    <td>{row.round}</td>
+                                    <td>
+                                        <div className="row-actions">
+                                            <button className="btn" onClick={() => selectAllAttendance(row.round)}>
+                                                Chọn tất cả
+                                            </button>
+                                            <button className="btn" onClick={() => clearAllAttendance(row.round)}>
+                                                Bỏ tất cả
+                                            </button>
+                                        </div>
+                                    </td>
+                                    {players.map((p) => (
+                                        <td key={p.id}>
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(row.attendance[p.id])}
+                                                onChange={(e) =>
+                                                    updateRow(row.round, (r) => ({
+                                                        ...r,
+                                                        attendance: { ...r.attendance, [p.id]: e.target.checked },
+                                                        rebuys: {
+                                                            ...r.rebuys,
+                                                            [p.id]: e.target.checked ? Boolean(r.rebuys?.[p.id]) : false
+                                                        },
+                                                        rank: {
+                                                            ...r.rank,
+                                                            [p.id]: e.target.checked ? (r.rank?.[p.id] ?? "NA") : "NA"
+                                                        }
+                                                    }))
+                                                }
+                                            />
+                                        </td>
+                                    ))}
+                                    <td>
+                                        <input
+                                            type="date"
+                                            value={row.date}
+                                            onChange={(e) => updateRow(row.round, (r) => ({ ...r, date: e.target.value }))}
+                                        />
+                                    </td>
+                                    <td>
+                                        <button className="btn btn-danger" onClick={() => deleteRound(row.round)}>Xóa</button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {rows.map((row) => (
+                            <div className="mobile-round-card" key={row.round}>
+                                <div className="mobile-round-header">
+                                    <strong>Lần chơi {row.round}</strong>
+                                    <div className="row-actions">
+                                        <button className="btn" onClick={() => selectAllAttendance(row.round)}>
+                                            Chọn tất cả
+                                        </button>
+                                        <button className="btn" onClick={() => clearAllAttendance(row.round)}>
+                                            Bỏ tất cả
+                                        </button>
+                                    </div>
+                                </div>
+                                <input
+                                    type="date"
+                                    value={row.date}
+                                    onChange={(e) => updateRow(row.round, (r) => ({ ...r, date: e.target.value }))}
+                                />
+                                <div className="mobile-player-list">
+                                    {players.map((p) => (
+                                        <label className="mobile-player-row" key={p.id}>
+                                            <span>{p.name}</span>
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(row.attendance[p.id])}
+                                                onChange={(e) =>
+                                                    updateRow(row.round, (r) => ({
+                                                        ...r,
+                                                        attendance: { ...r.attendance, [p.id]: e.target.checked },
+                                                        rebuys: {
+                                                            ...r.rebuys,
+                                                            [p.id]: e.target.checked ? Boolean(r.rebuys?.[p.id]) : false
+                                                        },
+                                                        rank: {
+                                                            ...r.rank,
+                                                            [p.id]: e.target.checked ? (r.rank?.[p.id] ?? "NA") : "NA"
+                                                        }
+                                                    }))
+                                                }
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                                <button className="btn btn-danger" onClick={() => deleteRound(row.round)}>
+                                    Xóa lần chơi
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                    {noteBox}
+                </div>
+            )}
+
+            {subTab === "Rebuys" && (
+                <div className="card">
+                    <h2>Rebuys</h2>
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((row) => (
+                                <tr key={row.round}>
+                                    <td>{row.round}</td>
+                                    {players.map((p) => (
+                                        <td key={p.id}>
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(row.attendance[p.id]) && Boolean(row.rebuys[p.id])}
+                                                disabled={!row.attendance[p.id]}
+                                                onChange={(e) =>
+                                                    updateRow(row.round, (r) => ({
+                                                        ...r,
+                                                        rebuys: {
+                                                            ...r.rebuys,
+                                                            [p.id]: Boolean(r.attendance?.[p.id]) && e.target.checked
+                                                        }
+                                                    }))
+                                                }
+                                            />
+                                        </td>
+                                    ))}
+                                    <td>{row.date}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {rows.map((row) => (
+                            <div className="mobile-round-card" key={row.round}>
+                                <div className="mobile-round-header">
+                                    <strong>Lần chơi {row.round}</strong>
+                                    <span>{row.date || "Chưa có ngày"}</span>
+                                </div>
+                                <div className="mobile-player-list">
+                                    {players.map((p) => (
+                                        <label className="mobile-player-row" key={p.id}>
+                                            <span>{p.name}</span>
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(row.attendance[p.id]) && Boolean(row.rebuys[p.id])}
+                                                disabled={!row.attendance[p.id]}
+                                                onChange={(e) =>
+                                                    updateRow(row.round, (r) => ({
+                                                        ...r,
+                                                        rebuys: {
+                                                            ...r.rebuys,
+                                                            [p.id]: Boolean(r.attendance?.[p.id]) && e.target.checked
+                                                        }
+                                                    }))
+                                                }
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    {noteBox}
+                </div>
+            )}
+
+            {subTab === "Rank" && (
+                <div className="card">
+                    <h2>Rank</h2>
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((row) => (
+                                <tr key={row.round}>
+                                    <td>{row.round}</td>
+                                    {players.map((p) => (
+                                        <td key={p.id}>
+                                            <select
+                                                className={`rank-select ${rankColorClass(row.rank[p.id])}`}
+                                                value={row.rank[p.id] ?? "NA"}
+                                                disabled={!row.attendance[p.id]}
+                                                onChange={(e) =>
+                                                    updateRow(row.round, (r) => ({
+                                                        ...r,
+                                                        rank: { ...r.rank, [p.id]: e.target.value }
+                                                    }))
+                                                }
+                                            >
+                                                {rankOptions(players.length).map((option) => (
+                                                    <option key={option} value={option}>
+                                                        {option === "NA" ? "N/A" : option}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </td>
+                                    ))}
+                                    <td>{row.date}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {rows.map((row) => (
+                            <div className="mobile-round-card" key={row.round}>
+                                <div className="mobile-round-header">
+                                    <strong>Lần chơi {row.round}</strong>
+                                    <span>{row.date || "Chưa có ngày"}</span>
+                                </div>
+                                <div className="mobile-player-list">
+                                    {players.map((p) => (
+                                        <label className="mobile-player-row" key={p.id}>
+                                            <span>{p.name}</span>
+                                            <select
+                                                className={`rank-select ${rankColorClass(row.rank[p.id])}`}
+                                                value={row.rank[p.id] ?? "NA"}
+                                                disabled={!row.attendance[p.id]}
+                                                onChange={(e) =>
+                                                    updateRow(row.round, (r) => ({
+                                                        ...r,
+                                                        rank: { ...r.rank, [p.id]: e.target.value }
+                                                    }))
+                                                }
+                                            >
+                                                {rankOptions(players.length).map((option) => (
+                                                    <option key={option} value={option}>
+                                                        {option === "NA" ? "N/A" : option}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    {noteBox}
+                </div>
+            )}
+
+            {subTab === "Profit" && (
+                <div className="card">
+                    <h2>Profit</h2>
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((row) => (
+                                <tr key={row.round}>
+                                    <td>{row.round}</td>
+                                    {players.map((p) => (
+                                        <td key={p.id}>
+                                            {row.attendance[p.id]
+                                                ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
+                                                : ""}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {rows.map((row) => (
+                            <div className="mobile-round-card" key={row.round}>
+                                <div className="mobile-round-header">
+                                    <strong>Lần chơi {row.round}</strong>
+                                    <span>{row.date || "Chưa có ngày"}</span>
+                                </div>
+                                <div className="mobile-player-list">
+                                    {players.map((p) => (
+                                        <div className="mobile-player-row" key={p.id}>
+                                            <span>{p.name}</span>
+                                            <strong>
+                                                {row.attendance[p.id]
+                                                    ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
+                                                    : ""}
+                                            </strong>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    {noteBox}
+                </div>
+            )}
+
+            {subTab === "Tổng kết" && (
+                <div className="card">
+                    <h2>Tổng kết</h2>
+                    <div className="row-actions">
+                        <button className="btn btn-primary" onClick={copySummary}>
+                            Copy Tổng kết
+                        </button>
+                        <button className="btn btn-danger" onClick={resetWorkspace}>
+                            Reset
+                        </button>
+                    </div>
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Người chơi</th>
+                                <th>Pts</th>
+                                <th>Ses</th>
+                                <th>Rb</th>
+                                <th>Buy-in</th>
+                                <th>Prize</th>
+                                <th>Jackpot</th>
+                                <th>Bounty</th>
+                                <th>Net</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {summary.players.map((row) => (
+                                <tr key={row.playerId}>
+                                    <td>{row.playerName}</td>
+                                    <td>{row.points}</td>
+                                    <td>{row.sessions}</td>
+                                    <td>{row.rebuys}</td>
+                                    <td>{formatCurrency(row.buyIn)}</td>
+                                    <td>{formatCurrency(row.prize)}</td>
+                                    <td>{formatCurrency(row.jackpot)}</td>
+                                    <td>{formatCurrency(row.bounty)}</td>
+                                    <td className={row.net >= 0 ? "text-positive" : "text-negative"}>
+                                        {formatCurrency(row.net)}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <div className="summary-grid">
+                        <div>Check: {formatCurrency(summary.check)}</div>
+                        <div>Tổng prize: {formatCurrency(summary.totalPrize)}</div>
+                        <div>Tổng điểm: {summary.totalPoints}</div>
+                    </div>
+                    {noteBox}
+                </div>
+            )}
+
+            {subTab === "Bounty" && (
+                <div className="card">
+                    <h2>Bounty</h2>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
+                                <th>Tiền K/O</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows.map((row) => (
+                                <tr key={row.round}>
+                                    <td>{row.round}</td>
+                                    {players.map((p) => (
+                                        <td key={p.id}>
+                                            <input
+                                                type="number"
+                                                value={row.bounty[p.id] ?? ""}
+                                                placeholder="Số K/O"
+                                                min={0}
+                                                step={1}
+                                                disabled={!row.attendance[p.id]}
+                                                onChange={(e) =>
+                                                    updateRow(row.round, (r) => ({
+                                                        ...r,
+                                                        bounty: { ...r.bounty, [p.id]: e.target.value }
+                                                    }))
+                                                }
+                                            />
+                                        </td>
+                                    ))}
+                                    <td>
+                                        {summary.koMoneyByRound[row.round] === ""
+                                            ? ""
+                                            : formatCurrency(summary.koMoneyByRound[row.round] ?? 0)}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {rows.map((row) => (
+                            <div className="mobile-round-card" key={row.round}>
+                                <div className="mobile-round-header">
+                                    <strong>Lần chơi {row.round}</strong>
+                                    <span>Tiền K/O: {summary.koMoneyByRound[row.round] === ""
+                                        ? ""
+                                        : formatCurrency(summary.koMoneyByRound[row.round] ?? 0)}</span>
+                                </div>
+                                <div className="mobile-player-list">
+                                    {players.map((p) => (
+                                        <label className="mobile-player-row" key={p.id}>
+                                            <span>{p.name}</span>
+                                            <input
+                                                type="number"
+                                                value={row.bounty[p.id] ?? ""}
+                                                placeholder="Số K/O"
+                                                min={0}
+                                                step={1}
+                                                disabled={!row.attendance[p.id]}
+                                                onChange={(e) =>
+                                                    updateRow(row.round, (r) => ({
+                                                        ...r,
+                                                        bounty: { ...r.bounty, [p.id]: e.target.value }
+                                                    }))
+                                                }
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    {noteBox}
+                </div>
+            )}
+
+            {subTab === "Jackpot" && (
+                <div className="card">
+                    <h2>Jackpot</h2>
+                    <div className="editor-block">
+                        <h3>Jackpot tổng đã góp (sửa/xóa thủ công)</h3>
+                        <div className="form-grid form-grid-4">
+                            <input
+                                type="number"
+                                value={jackpotTotalInput}
+                                placeholder={String(jackpotTotalContribAuto)}
+                                onChange={(e) => setJackpotTotalInput(e.target.value)}
+                            />
+                        </div>
+                        <div className="row-actions">
+                            <button
+                                className="btn btn-primary"
+                                onClick={() =>
+                                    setSettings((prev) => ({
+                                        ...prev,
+                                        jackpotTotalOverride:
+                                            jackpotTotalInput.trim() === ""
+                                                ? null
+                                                : Number(jackpotTotalInput)
+                                    }))
+                                }
+                            >
+                                Lưu tổng góp
+                            </button>
+                            <button
+                                className="btn btn-danger"
+                                onClick={() => {
+                                    setSettings((prev) => ({ ...prev, jackpotTotalOverride: null }));
+                                    setJackpotTotalInput("");
+                                }}
+                            >
+                                Xóa chỉnh sửa
+                            </button>
+                        </div>
+                    </div>
+                    <div className="summary-grid">
+                        <div>
+                            Jackpot tổng đã góp: {formatCurrency(jackpotTotalContrib)}
+                            {settings.jackpotTotalOverride !== null ? " (manual)" : " (auto)"}
+                        </div>
+                        <div>Jackpot đã trả: {formatCurrency(jackpotPaid)}</div>
+                        <div>Jackpot còn lại: {formatCurrency(jackpotRemain)}</div>
+                    </div>
+                    <h3>Danh sách ăn Jackpot</h3>
+                    <div className="row-actions">
+                        <button className="btn btn-primary" onClick={addJackpotWin}>Thêm dòng ăn jackpot</button>
+                    </div>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                <th>Người ăn</th>
+                                <th>Loại</th>
+                                <th>Tiền ăn</th>
+                                <th>Xóa</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {jackpotWins.map((item) => (
+                                <tr key={item.id}>
+                                    <td>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={item.round}
+                                            onChange={(e) => updateJackpotWin(item.id, { round: Number(e.target.value || 1) })}
+                                        />
+                                    </td>
+                                    <td>
+                                        <select
+                                            value={item.winnerId}
+                                            onChange={(e) => updateJackpotWin(item.id, { winnerId: Number(e.target.value) })}
+                                        >
+                                            <option value="">Chọn người</option>
+                                            {players.map((player) => (
+                                                <option key={player.id} value={player.id}>
+                                                    {player.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <select
+                                            value={item.type}
+                                            onChange={(e) => updateJackpotWin(item.id, { type: e.target.value })}
+                                        >
+                                            {JACKPOT_TYPES.map((jt) => (
+                                                <option key={jt.key} value={jt.key}>
+                                                    {jt.key}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="number"
+                                            value={item.amount}
+                                            onChange={(e) => updateJackpotWin(item.id, { amount: Number(e.target.value || 0) })}
+                                        />
+                                    </td>
+                                    <td>
+                                        <button className="btn btn-danger" onClick={() => deleteJackpotWin(item.id)}>
+                                            Xóa
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <h3>Tính Jackpot theo %</h3>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Loại</th>
+                                <th>%</th>
+                                <th>Tiền</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {JACKPOT_TYPES.map((type) => (
+                                <tr key={type.key}>
+                                    <td>{type.key}</td>
+                                    <td>{(type.percent * 100).toFixed(0)}%</td>
+                                    <td>{formatCurrency(Math.round(jackpotRemain * type.percent))}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {noteBox}
+                </div>
+            )}
+
+            {subTab === "Thống kê top" && (
+                <div className="card">
+                    <h2>Thống kê top</h2>
+                    <h3>Số lần Top 1</h3>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Người chơi</th>
+                                <th>Số lần Top 1</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {summary.players.map((row) => (
+                                <tr key={row.playerId}>
+                                    <td>{row.playerName}</td>
+                                    <td>{row.topStats[1]}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <h3>Thống kê số lượng top</h3>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Người chơi</th>
+                                {players.map((_, idx) => (
+                                    <th key={idx}>Top {idx + 1}</th>
+                                ))}
+                                <th>Avg</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {summary.players.map((row) => (
+                                <tr key={row.playerId}>
+                                    <td>{row.playerName}</td>
+                                    {players.map((_, idx) => (
+                                        <td key={idx}>{row.topStats[idx + 1]}</td>
+                                    ))}
+                                    <td>{row.avgRank > 0 ? row.avgRank.toFixed(2) : "-"}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {noteBox}
+                </div>
+            )}
+
+            {subTab === "Settings" && (
+                <div className="card">
+                    <h2>Settings</h2>
+                    <div className="editor-block">
+                        <h3>Backup JSON</h3>
+                        <div className="row-actions">
+                            <button className="btn btn-primary" onClick={exportBackup}>
+                                Export JSON
+                            </button>
+                            <label className="btn">
+                                Import JSON
+                                <input
+                                    type="file"
+                                    accept="application/json,.json"
+                                    className="visually-hidden"
+                                    onChange={importBackup}
+                                />
+                            </label>
+                        </div>
+                    </div>
+                    <div className="editor-block">
+                        <h3>Người tham gia (CRUD)</h3>
+                        <div className="form-grid form-grid-4">
+                            <input
+                                type="text"
+                                placeholder="Tên người chơi mới"
+                                value={newPlayerName}
+                                onChange={(e) => setNewPlayerName(e.target.value)}
+                            />
+                            <button className="btn btn-primary" onClick={addPlayer}>Thêm người chơi</button>
+                        </div>
+                        <table className="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Tên</th>
+                                    <th>Hành động</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {players.map((player) => (
+                                    <tr key={player.id}>
+                                        <td>
+                                            {editingPlayerId === player.id ? (
+                                                <input
+                                                    type="text"
+                                                    value={editingPlayerName}
+                                                    onChange={(e) => setEditingPlayerName(e.target.value)}
+                                                />
+                                            ) : (
+                                                player.name
+                                            )}
+                                        </td>
+                                        <td>
+                                            {editingPlayerId === player.id ? (
+                                                <div className="row-actions">
+                                                    <button className="btn btn-primary" onClick={() => savePlayerName(player.id)}>Lưu</button>
+                                                    <button className="btn" onClick={() => setEditingPlayerId(null)}>Hủy</button>
+                                                </div>
+                                            ) : (
+                                                <div className="row-actions">
+                                                    <button
+                                                        className="btn"
+                                                        onClick={() => {
+                                                            setEditingPlayerId(player.id);
+                                                            setEditingPlayerName(player.name);
+                                                        }}
+                                                    >
+                                                        Sửa
+                                                    </button>
+                                                    <button className="btn btn-danger" onClick={() => deletePlayer(player.id)}>
+                                                        Xóa
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="form-grid form-grid-4">
+                        <label>
+                            Buy-in
+                            <input
+                                type="number"
+                                value={settings.buyIn}
+                                onChange={(e) => setSettings((prev) => ({ ...prev, buyIn: Number(e.target.value || 0) }))}
+                            />
+                        </label>
+                        <label>
+                            Jackpot mặc định
+                            <input
+                                type="number"
+                                value={settings.jackpot}
+                                onChange={(e) => setSettings((prev) => ({ ...prev, jackpot: Number(e.target.value || 0) }))}
+                            />
+                        </label>
+                        <label>
+                            Bounty mặc định
+                            <input
+                                type="number"
+                                value={settings.bounty}
+                                onChange={(e) => setSettings((prev) => ({ ...prev, bounty: Number(e.target.value || 0) }))}
+                            />
+                        </label>
+                    </div>
+                    <h3>Scoring Guide</h3>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Điểm</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {players.map((_, idx) => (
+                                <tr key={idx}>
+                                    <td>Top {idx + 1}</td>
+                                    <td>
+                                        <input
+                                            type="number"
+                                            value={settings.rankPoints[idx + 1] ?? 0}
+                                            onChange={(e) =>
+                                                setSettings((prev) => ({
+                                                    ...prev,
+                                                    rankPointsCustomized: true,
+                                                    rankPoints: {
+                                                        ...prev.rankPoints,
+                                                        [idx + 1]: Number(e.target.value || 0)
+                                                    }
+                                                }))
+                                            }
+                                        />
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <h3>Blind structure</h3>
+                    <div className="row-actions">
+                        <button className="btn btn-primary" onClick={addBlindLevel}>Thêm level</button>
+                    </div>
+                    {blindLevelError && <p className="error-text">{blindLevelError}</p>}
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Level</th>
+                                <th>Blind</th>
+                                <th>Duration</th>
+                                <th>Note</th>
+                                <th>Hành động</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {settings.blindLevels.map((item) => (
+                                <tr key={item.id}>
+                                    <td>
+                                        <input
+                                            type="number"
+                                            value={item.level}
+                                            onChange={(e) => updateBlindLevel(item.id, { level: Number(e.target.value || 0) })}
+                                        />
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="text"
+                                            value={item.blind}
+                                            placeholder="VD: 300/600"
+                                            onChange={(e) => updateBlindLevel(item.id, { blind: e.target.value })}
+                                        />
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="text"
+                                            value={item.duration}
+                                            placeholder="VD: 10'"
+                                            onChange={(e) => updateBlindLevel(item.id, { duration: e.target.value })}
+                                        />
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="text"
+                                            value={item.note}
+                                            placeholder="Ghi chú..."
+                                            onChange={(e) => updateBlindLevel(item.id, { note: e.target.value })}
+                                        />
+                                    </td>
+                                    <td>
+                                        <button className="btn btn-danger" onClick={() => deleteBlindLevel(item.id)}>Xóa</button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {noteBox}
+                </div>
+            )}
+        </div>
+    );
+}

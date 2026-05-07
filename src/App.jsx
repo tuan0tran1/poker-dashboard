@@ -1,0 +1,50 @@
+import { useState } from "react";
+import "./App.css";
+import JPBTPage from "./pages/JPBTPage";
+import OmahaPage from "./pages/OmahaPage";
+
+const PLAYER_NAMES = ["Nam", "Cường", "Tuấn", "Hải", "Long", "Phong", "Thắng"];
+
+const DEFAULT_PLAYERS = PLAYER_NAMES.map((name, index) => ({ id: index + 1, name }));
+
+export default function App() {
+    const [activeTab, setActiveTab] = useState("omaha");
+    const [players] = useState(DEFAULT_PLAYERS);
+
+    const tabs = [
+        { id: "omaha", label: "Omaha" },
+        { id: "jpbt", label: "JP + BT" }
+    ];
+
+    return (
+        <main className="app-shell">
+            <header>
+                <h1>Poker Dashboard</h1>
+                <p>Clean, fast, localStorage persistence</p>
+            </header>
+
+            <div className="tab-row">
+                {tabs.map((tab) => (
+                    <button
+                        key={tab.id}
+                        className={activeTab === tab.id ? "tab tab-active" : "tab"}
+                        onClick={() => setActiveTab(tab.id)}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
+            </div>
+
+            {activeTab === "omaha" && (
+                <OmahaPage
+                    players={players}
+                />
+            )}
+            {activeTab === "jpbt" && (
+                <JPBTPage
+                    players={players}
+                />
+            )}
+        </main>
+    );
+}
