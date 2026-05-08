@@ -23,7 +23,7 @@ export default function App() {
                 <p>Clean, fast, localStorage persistence</p>
             </header>
 
-            <div className="tab-row">
+            <div className="tab-row app-tab-row">
                 {tabs.map((tab) => (
                     <button
                         key={tab.id}

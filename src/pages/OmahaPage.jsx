@@ -8,12 +8,20 @@ const TAB_LABEL_MIGRATIONS = {
     "Tong ket": "Tổng kết",
     "Thong ke top": "Thống kê top"
 };
-const DEFAULT_ROUNDS = 8;
+const DEFAULT_ROUNDS = 1;
+
+function getTodayDateInputValue() {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
 
 function createRows(players, count = DEFAULT_ROUNDS) {
     return Array.from({ length: count }, (_, index) => ({
         round: index + 1,
-        date: "",
+        date: getTodayDateInputValue(),
         attendance: Object.fromEntries(players.map((player) => [player.id, false])),
         rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
         rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -65,8 +73,20 @@ function rankColorClass(rank) {
     return "rank-top-other";
 }
 
-function normalizeRows(rows) {
-    return rows.map((row, index) => ({ ...row, round: index + 1 }));
+function isBlankRow(row, players) {
+    return (
+        players.every((player) => !row.attendance?.[player.id]) &&
+        players.every((player) => !row.rebuys?.[player.id]) &&
+        players.every((player) => (row.rank?.[player.id] ?? "NA") === "NA")
+    );
+}
+
+function normalizeRows(rows, players = []) {
+    const nextRows = rows.map((row, index) => ({ ...row, round: index + 1 }));
+    while (nextRows.length > 1 && isBlankRow(nextRows.at(-1), players) && isBlankRow(nextRows.at(-2), players)) {
+        nextRows.pop();
+    }
+    return nextRows.map((row, index) => ({ ...row, round: index + 1 }));
 }
 
 function withPlayerKeys(rows, players) {
@@ -130,7 +150,7 @@ export default function OmahaPage({ players: seedPlayers }) {
         try {
             const parsed = JSON.parse(raw);
             const players = Array.isArray(parsed.players) && parsed.players.length > 0 ? parsed.players : defaultPlayers;
-            const rows = Array.isArray(parsed.rows) ? normalizeRows(withPlayerKeys(parsed.rows, players)) : defaultRows;
+            const rows = Array.isArray(parsed.rows) ? normalizeRows(withPlayerKeys(parsed.rows, players), players) : defaultRows;
             const parsedRankPoints = parsed.settings?.rankPoints;
             const defaultRankPoints = createDefaultSettings(players).rankPoints;
             return {
@@ -354,12 +374,24 @@ export default function OmahaPage({ players: seedPlayers }) {
         }));
     };
 
+    const formatAttendanceNames = (row) => {
+        const names = players.filter((player) => row.attendance?.[player.id]).map((player) => player.name);
+        return names.length > 0 ? names.join(", ") : "-";
+    };
+
     const addRound = () => {
+        const currentRow = rows.at(-1);
+        if (currentRow && isBlankRow(currentRow, players)) {
+            showToast("Lần chơi hiện tại chưa có dữ liệu điểm danh.", "error");
+            return;
+        }
         setRows((prev) => [
-            ...prev,
+            ...prev.map((row, index) =>
+                index === prev.length - 1 ? { ...row, date: row.date || getTodayDateInputValue() } : row
+            ),
             {
                 round: prev.length + 1,
-                date: "",
+                date: getTodayDateInputValue(),
                 attendance: Object.fromEntries(players.map((player) => [player.id, false])),
                 rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
                 rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -371,7 +403,7 @@ export default function OmahaPage({ players: seedPlayers }) {
     const deleteRound = (round) => {
         setRows((prev) => {
             if (prev.length <= 1) return prev;
-            return normalizeRows(prev.filter((row) => row.round !== round));
+            return normalizeRows(prev.filter((row) => row.round !== round), players);
         });
     };
 
@@ -462,7 +494,7 @@ export default function OmahaPage({ players: seedPlayers }) {
             setPlayers(nextPlayers);
             setRows(
                 Array.isArray(imported.rows)
-                    ? normalizeRows(withPlayerKeys(imported.rows, nextPlayers))
+                    ? normalizeRows(withPlayerKeys(imported.rows, nextPlayers), nextPlayers)
                     : createRows(nextPlayers)
             );
             setSettings(nextSettings);
@@ -555,6 +587,9 @@ export default function OmahaPage({ players: seedPlayers }) {
         });
     };
 
+    const currentAttendanceRow = rows.at(-1);
+    const attendanceHistoryRows = rows.slice(0, -1);
+
     return (
         <div className="stack">
             {toast && (
@@ -563,7 +598,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                 </div>
             )}
 
-            <div className="tab-row">
+            <div className="tab-row page-tab-row">
                 {SUB_TABS.map((name) => (
                     <button
                         key={name}
@@ -603,15 +638,15 @@ export default function OmahaPage({ players: seedPlayers }) {
                             </tr>
                         </thead>
                         <tbody>
-                            {rows.map((row) => (
-                                <tr key={row.round}>
-                                    <td>{row.round}</td>
+                            {currentAttendanceRow && (
+                                <tr key={currentAttendanceRow.round}>
+                                    <td>{currentAttendanceRow.round}</td>
                                     <td>
                                         <div className="row-actions">
-                                            <button className="btn" onClick={() => selectAllAttendance(row.round)}>
+                                            <button className="btn" onClick={() => selectAllAttendance(currentAttendanceRow.round)}>
                                                 Chọn tất cả
                                             </button>
-                                            <button className="btn" onClick={() => clearAllAttendance(row.round)}>
+                                            <button className="btn" onClick={() => clearAllAttendance(currentAttendanceRow.round)}>
                                                 Bỏ tất cả
                                             </button>
                                         </div>
@@ -620,9 +655,9 @@ export default function OmahaPage({ players: seedPlayers }) {
                                         <td key={p.id}>
                                             <input
                                                 type="checkbox"
-                                                checked={Boolean(row.attendance[p.id])}
+                                                checked={Boolean(currentAttendanceRow.attendance[p.id])}
                                                 onChange={(e) =>
-                                                    updateRow(row.round, (r) => ({
+                                                    updateRow(currentAttendanceRow.round, (r) => ({
                                                         ...r,
                                                         attendance: { ...r.attendance, [p.id]: e.target.checked },
                                                         rebuys: {
@@ -641,40 +676,40 @@ export default function OmahaPage({ players: seedPlayers }) {
                                     <td>
                                         <input
                                             type="date"
-                                            value={row.date}
+                                            value={currentAttendanceRow.date}
                                             onChange={(e) =>
-                                                updateRow(row.round, (r) => ({ ...r, date: e.target.value }))
+                                                updateRow(currentAttendanceRow.round, (r) => ({ ...r, date: e.target.value }))
                                             }
                                         />
                                     </td>
                                     <td>
-                                        <button className="btn btn-danger" onClick={() => deleteRound(row.round)}>
+                                        <button className="btn btn-danger" onClick={() => deleteRound(currentAttendanceRow.round)}>
                                             Xóa
                                         </button>
                                     </td>
                                 </tr>
-                            ))}
+                            )}
                         </tbody>
                     </table>
                     <div className="mobile-round-list">
-                        {rows.map((row) => (
-                            <div className="mobile-round-card" key={row.round}>
+                        {currentAttendanceRow && (
+                            <div className="mobile-round-card" key={currentAttendanceRow.round}>
                                 <div className="mobile-round-header">
-                                    <strong>Lần chơi {row.round}</strong>
+                                    <strong>Lần chơi {currentAttendanceRow.round}</strong>
                                     <div className="row-actions">
-                                        <button className="btn" onClick={() => selectAllAttendance(row.round)}>
+                                        <button className="btn" onClick={() => selectAllAttendance(currentAttendanceRow.round)}>
                                             Chọn tất cả
                                         </button>
-                                        <button className="btn" onClick={() => clearAllAttendance(row.round)}>
+                                        <button className="btn" onClick={() => clearAllAttendance(currentAttendanceRow.round)}>
                                             Bỏ tất cả
                                         </button>
                                     </div>
                                 </div>
                                 <input
                                     type="date"
-                                    value={row.date}
+                                    value={currentAttendanceRow.date}
                                     onChange={(e) =>
-                                        updateRow(row.round, (r) => ({ ...r, date: e.target.value }))
+                                        updateRow(currentAttendanceRow.round, (r) => ({ ...r, date: e.target.value }))
                                     }
                                 />
                                 <div className="mobile-player-list">
@@ -683,9 +718,9 @@ export default function OmahaPage({ players: seedPlayers }) {
                                             <span>{p.name}</span>
                                             <input
                                                 type="checkbox"
-                                                checked={Boolean(row.attendance[p.id])}
+                                                checked={Boolean(currentAttendanceRow.attendance[p.id])}
                                                 onChange={(e) =>
-                                                    updateRow(row.round, (r) => ({
+                                                    updateRow(currentAttendanceRow.round, (r) => ({
                                                         ...r,
                                                         attendance: { ...r.attendance, [p.id]: e.target.checked },
                                                         rebuys: {
@@ -702,11 +737,54 @@ export default function OmahaPage({ players: seedPlayers }) {
                                         </label>
                                     ))}
                                 </div>
-                                <button className="btn btn-danger" onClick={() => deleteRound(row.round)}>
+                                <button className="btn btn-danger" onClick={() => deleteRound(currentAttendanceRow.round)}>
                                     Xóa lần chơi
                                 </button>
                             </div>
-                        ))}
+                        )}
+                    </div>
+                    <h3>Lịch sử người tham gia</h3>
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                <th>Date</th>
+                                <th>Người tham gia</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {attendanceHistoryRows.length > 0 ? (
+                                attendanceHistoryRows.map((row) => (
+                                    <tr key={row.round}>
+                                        <td>{row.round}</td>
+                                        <td>{row.date}</td>
+                                        <td>{formatAttendanceNames(row)}</td>
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr>
+                                    <td colSpan={3}>Chưa có lịch sử.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {attendanceHistoryRows.length > 0 ? (
+                            attendanceHistoryRows.map((row) => (
+                                <div className="mobile-round-card" key={row.round}>
+                                    <div className="mobile-round-header">
+                                        <strong>Lần chơi {row.round}</strong>
+                                        <span>{row.date || "Chưa có ngày"}</span>
+                                    </div>
+                                    <div className="mobile-player-row">
+                                        <span>Người tham gia</span>
+                                        <strong>{formatAttendanceNames(row)}</strong>
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="mobile-round-card">Chưa có lịch sử.</div>
+                        )}
                     </div>
                     {noteBox}
                 </div>
