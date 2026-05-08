@@ -25,3 +25,6 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Supabase local CLI state
+supabase/.temp/
