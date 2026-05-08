@@ -1,5 +1,9 @@
 # React + Vite
 
+## Supabase Sync
+
+See `SUPABASE_SETUP.md` for database SQL, local env variables, and Vercel deployment env setup.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

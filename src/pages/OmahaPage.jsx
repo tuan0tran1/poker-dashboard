@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../utils/finance";
+import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
 const OMAHA_STORAGE_KEY = "omaha-workspace-v1";
 const SUB_TABS = ["Điểm danh", "Rebuys", "Rank", "Profit", "Tổng kết", "Thống kê top", "Settings"];
@@ -184,6 +185,8 @@ export default function OmahaPage({ players: seedPlayers }) {
     const [editingPlayerName, setEditingPlayerName] = useState("");
     const [blindLevelError, setBlindLevelError] = useState("");
     const [toast, setToast] = useState(null);
+    const [cloudReady, setCloudReady] = useState(!isSupabaseConfigured);
+    const hasLoadedCloudRef = useRef(false);
 
     useEffect(() => {
         if (!toast) return undefined;
@@ -194,6 +197,91 @@ export default function OmahaPage({ players: seedPlayers }) {
     const showToast = (message, type = "info") => {
         setToast({ message, type });
     };
+
+    const normalizeWorkspaceData = (workspaceData) => {
+        const nextPlayers =
+            Array.isArray(workspaceData.players) && workspaceData.players.length > 0
+                ? workspaceData.players
+                : players;
+        const defaultSettings = createDefaultSettings(nextPlayers);
+        const parsedRankPoints = workspaceData.settings?.rankPoints;
+        return {
+            players: nextPlayers,
+            rows: Array.isArray(workspaceData.rows)
+                ? normalizeRows(withPlayerKeys(workspaceData.rows, nextPlayers), nextPlayers)
+                : createRows(nextPlayers),
+            settings: {
+                ...defaultSettings,
+                ...(workspaceData.settings ?? {}),
+                rankPoints: Object.fromEntries(
+                    nextPlayers.map((_, idx) => [
+                        idx + 1,
+                        parsedRankPoints?.[idx + 1] ?? defaultSettings.rankPoints[idx + 1]
+                    ])
+                ),
+                rankPointsCustomized: Boolean(workspaceData.settings?.rankPointsCustomized),
+                blindLevels: normalizeBlindLevels(workspaceData.settings?.blindLevels ?? defaultSettings.blindLevels)
+            },
+            notes: normalizeNotes(workspaceData.notes)
+        };
+    };
+
+    const applyWorkspaceData = (workspaceData) => {
+        const nextWorkspace = normalizeWorkspaceData(workspaceData);
+        setPlayers(nextWorkspace.players);
+        setRows(nextWorkspace.rows);
+        setSettings(nextWorkspace.settings);
+        setNotes(nextWorkspace.notes);
+    };
+
+    const getWorkspaceData = () => ({
+        type: "omaha",
+        players,
+        rows,
+        settings,
+        notes
+    });
+
+    useEffect(() => {
+        if (!isSupabaseConfigured) {
+            hasLoadedCloudRef.current = true;
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        async function loadWorkspace() {
+            let canSaveToCloud = false;
+            try {
+                const cloudData = await loadCloudWorkspace(OMAHA_STORAGE_KEY);
+                if (cancelled) return;
+                canSaveToCloud = true;
+                if (cloudData) {
+                    applyWorkspaceData(cloudData);
+                    showToast("Đã tải dữ liệu Omaha từ cloud.");
+                } else {
+                    showToast("Cloud Omaha chưa có dữ liệu, sẽ tải dữ liệu hiện tại lên.");
+                }
+            } catch {
+                if (!cancelled) {
+                    showToast("Không thể tải dữ liệu Omaha từ cloud, đang dùng dữ liệu trên máy.", "error");
+                }
+            } finally {
+                if (!cancelled && canSaveToCloud) {
+                    hasLoadedCloudRef.current = true;
+                    setCloudReady(true);
+                }
+            }
+        }
+
+        loadWorkspace();
+
+        return () => {
+            cancelled = true;
+        };
+        // Cloud should load only once on mount; the helper intentionally uses initial local state as fallback.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const profitByRound = useMemo(() => {
         const baseAmount = Number(settings.buyIn || 0);
@@ -281,8 +369,23 @@ export default function OmahaPage({ players: seedPlayers }) {
     }, [players, rows, profitByRound]);
 
     useEffect(() => {
-        localStorage.setItem(OMAHA_STORAGE_KEY, JSON.stringify({ players, rows, settings, notes }));
-    }, [players, rows, settings, notes]);
+        const workspaceData = { type: "omaha", players, rows, settings, notes };
+        localStorage.setItem(OMAHA_STORAGE_KEY, JSON.stringify(workspaceData));
+
+        if (!cloudReady || !isSupabaseConfigured || !hasLoadedCloudRef.current) {
+            return undefined;
+        }
+
+        const timeoutId = window.setTimeout(async () => {
+            try {
+                await saveCloudWorkspace(OMAHA_STORAGE_KEY, workspaceData);
+            } catch {
+                showToast("Không thể lưu Omaha lên cloud, dữ liệu vẫn được lưu trên máy.", "error");
+            }
+        }, 900);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [players, rows, settings, notes, cloudReady]);
 
     const syncRowsWithPlayers = (nextPlayers) => {
         setRows((prev) => withPlayerKeys(prev, nextPlayers));
@@ -455,12 +558,8 @@ export default function OmahaPage({ players: seedPlayers }) {
     };
 
     const getBackupData = () => ({
-            type: "omaha",
-            exportedAt: new Date().toISOString(),
-            players,
-            rows,
-            settings,
-            notes
+        ...getWorkspaceData(),
+        exportedAt: new Date().toISOString()
     });
 
     const exportBackup = () => {

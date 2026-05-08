@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../utils/finance";
+import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
 const JPBT_STORAGE_KEY = "jpbt-workspace-v1";
 const SUB_TABS = ["Điểm danh", "Rebuys", "Rank", "Profit", "Tổng kết", "Bounty", "Jackpot", "Thống kê top", "Settings"];
@@ -248,6 +249,8 @@ export default function JPBTPage({ players: seedPlayers }) {
     const [jackpotTotalInput, setJackpotTotalInput] = useState(
         String(initialData.settings?.jackpotTotalOverride ?? "")
     );
+    const [cloudReady, setCloudReady] = useState(!isSupabaseConfigured);
+    const hasLoadedCloudRef = useRef(false);
 
     useEffect(() => {
         if (!toast) return undefined;
@@ -259,9 +262,117 @@ export default function JPBTPage({ players: seedPlayers }) {
         setToast({ message, type });
     };
 
+    const normalizeWorkspaceData = (workspaceData) => {
+        const nextPlayers =
+            Array.isArray(workspaceData.players) && workspaceData.players.length > 0
+                ? workspaceData.players
+                : players;
+        const defaultSettings = createDefaultSettings(nextPlayers);
+        const parsedRankPoints = workspaceData.settings?.rankPoints;
+        const nextSettings = {
+            ...defaultSettings,
+            ...(workspaceData.settings ?? {}),
+            rankPoints: Object.fromEntries(
+                nextPlayers.map((_, idx) => [
+                    idx + 1,
+                    parsedRankPoints?.[idx + 1] ?? defaultSettings.rankPoints[idx + 1]
+                ])
+            ),
+            rankPointsCustomized: Boolean(workspaceData.settings?.rankPointsCustomized),
+            jackpotTotalOverride:
+                workspaceData.settings?.jackpotTotalOverride ?? defaultSettings.jackpotTotalOverride,
+            blindLevels: normalizeBlindLevels(workspaceData.settings?.blindLevels ?? defaultSettings.blindLevels)
+        };
+
+        return {
+            players: nextPlayers,
+            rows: Array.isArray(workspaceData.rows)
+                ? normalizeRows(withPlayerKeys(workspaceData.rows, nextPlayers), nextPlayers)
+                : createRows(nextPlayers),
+            settings: nextSettings,
+            notes: normalizeNotes(workspaceData.notes),
+            jackpotWins: Array.isArray(workspaceData.jackpotWins) ? workspaceData.jackpotWins : []
+        };
+    };
+
+    const applyWorkspaceData = (workspaceData) => {
+        const nextWorkspace = normalizeWorkspaceData(workspaceData);
+        setPlayers(nextWorkspace.players);
+        setRows(nextWorkspace.rows);
+        setSettings(nextWorkspace.settings);
+        setNotes(nextWorkspace.notes);
+        setJackpotWins(nextWorkspace.jackpotWins);
+        setJackpotTotalInput(String(nextWorkspace.settings.jackpotTotalOverride ?? ""));
+    };
+
+    const getWorkspaceData = () => ({
+        type: "jpbt",
+        players,
+        rows,
+        settings,
+        notes,
+        jackpotWins
+    });
+
     useEffect(() => {
-        localStorage.setItem(JPBT_STORAGE_KEY, JSON.stringify({ players, rows, settings, notes, jackpotWins }));
-    }, [players, rows, settings, notes, jackpotWins]);
+        if (!isSupabaseConfigured) {
+            hasLoadedCloudRef.current = true;
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        async function loadWorkspace() {
+            let canSaveToCloud = false;
+            try {
+                const cloudData = await loadCloudWorkspace(JPBT_STORAGE_KEY);
+                if (cancelled) return;
+                canSaveToCloud = true;
+                if (cloudData) {
+                    applyWorkspaceData(cloudData);
+                    showToast("Đã tải dữ liệu JP+BT từ cloud.");
+                } else {
+                    showToast("Cloud JP+BT chưa có dữ liệu, sẽ tải dữ liệu hiện tại lên.");
+                }
+            } catch {
+                if (!cancelled) {
+                    showToast("Không thể tải dữ liệu JP+BT từ cloud, đang dùng dữ liệu trên máy.", "error");
+                }
+            } finally {
+                if (!cancelled && canSaveToCloud) {
+                    hasLoadedCloudRef.current = true;
+                    setCloudReady(true);
+                }
+            }
+        }
+
+        loadWorkspace();
+
+        return () => {
+            cancelled = true;
+        };
+        // Cloud should load only once on mount; the helper intentionally uses initial local state as fallback.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+        const workspaceData = { type: "jpbt", players, rows, settings, notes, jackpotWins };
+        localStorage.setItem(JPBT_STORAGE_KEY, JSON.stringify(workspaceData));
+
+        if (!cloudReady || !isSupabaseConfigured || !hasLoadedCloudRef.current) {
+            return undefined;
+        }
+
+        const timeoutId = window.setTimeout(async () => {
+            try {
+                await saveCloudWorkspace(JPBT_STORAGE_KEY, workspaceData);
+            } catch {
+                showToast("Không thể lưu JP+BT lên cloud, dữ liệu vẫn được lưu trên máy.", "error");
+            }
+        }, 900);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [players, rows, settings, notes, jackpotWins, cloudReady]);
 
     const syncRowsWithPlayers = (nextPlayers) => {
         setRows((prev) => withPlayerKeys(prev, nextPlayers));
@@ -393,13 +504,8 @@ export default function JPBTPage({ players: seedPlayers }) {
     };
 
     const getBackupData = () => ({
-            type: "jpbt",
-            exportedAt: new Date().toISOString(),
-            players,
-            rows,
-            settings,
-            notes,
-            jackpotWins
+        ...getWorkspaceData(),
+        exportedAt: new Date().toISOString()
     });
 
     const exportBackup = () => {
@@ -549,50 +655,48 @@ export default function JPBTPage({ players: seedPlayers }) {
         );
     }, [players, rows, settings.buyIn, settings.jackpot, settings.bounty, settings.rankPoints]);
 
-    const dataIssues = useMemo(() => {
-        return rows.flatMap((row) => {
-            const attendees = players.filter((player) => row.attendance?.[player.id]);
-            if (attendees.length === 0) return [];
+    const dataIssues = rows.flatMap((row) => {
+        const attendees = players.filter((player) => row.attendance?.[player.id]);
+        if (attendees.length === 0) return [];
 
-            const issues = [];
-            const missingRankPlayers = attendees.filter((player) => (row.rank?.[player.id] ?? "NA") === "NA");
-            if (missingRankPlayers.length > 0) {
-                issues.push({
-                    key: `${row.round}-missing-rank`,
-                    message: `Lần chơi ${row.round}: ${missingRankPlayers.map((player) => player.name).join(", ")} đã điểm danh nhưng chưa chọn rank.`
-                });
-            }
-
-            const ranksByValue = new Map();
-            attendees.forEach((player) => {
-                const rank = row.rank?.[player.id] ?? "NA";
-                if (rank === "NA") return;
-                ranksByValue.set(rank, [...(ranksByValue.get(rank) ?? []), player.name]);
+        const issues = [];
+        const missingRankPlayers = attendees.filter((player) => (row.rank?.[player.id] ?? "NA") === "NA");
+        if (missingRankPlayers.length > 0) {
+            issues.push({
+                key: `${row.round}-missing-rank`,
+                message: `Lần chơi ${row.round}: ${missingRankPlayers.map((player) => player.name).join(", ")} đã điểm danh nhưng chưa chọn rank.`
             });
-            Array.from(ranksByValue.entries())
-                .filter(([, names]) => names.length > 1)
-                .forEach(([rank, names]) => {
-                    issues.push({
-                        key: `${row.round}-duplicate-${rank}`,
-                        message: `Lần chơi ${row.round}: ${rank} bị trùng cho ${names.join(", ")}.`
-                    });
-                });
+        }
 
-            const profitTotal = players.reduce((sum, player) => {
-                const value = profitByRound[row.round]?.[player.id];
-                const amount = Number(value);
-                return Number.isFinite(amount) ? sum + amount : sum;
-            }, 0);
-            if (Math.abs(profitTotal) > 1) {
-                issues.push({
-                    key: `${row.round}-profit-balance`,
-                    message: `Lần chơi ${row.round}: tổng profit đang lệch ${formatCurrency(profitTotal)}.`
-                });
-            }
-
-            return issues;
+        const ranksByValue = new Map();
+        attendees.forEach((player) => {
+            const rank = row.rank?.[player.id] ?? "NA";
+            if (rank === "NA") return;
+            ranksByValue.set(rank, [...(ranksByValue.get(rank) ?? []), player.name]);
         });
-    }, [players, rows, profitByRound]);
+        Array.from(ranksByValue.entries())
+            .filter(([, names]) => names.length > 1)
+            .forEach(([rank, names]) => {
+                issues.push({
+                    key: `${row.round}-duplicate-${rank}`,
+                    message: `Lần chơi ${row.round}: ${rank} bị trùng cho ${names.join(", ")}.`
+                });
+            });
+
+        const profitTotal = players.reduce((sum, player) => {
+            const value = profitByRound[row.round]?.[player.id];
+            const amount = Number(value);
+            return Number.isFinite(amount) ? sum + amount : sum;
+        }, 0);
+        if (Math.abs(profitTotal) > 1) {
+            issues.push({
+                key: `${row.round}-profit-balance`,
+                message: `Lần chơi ${row.round}: tổng profit đang lệch ${formatCurrency(profitTotal)}.`
+            });
+        }
+
+        return issues;
+    });
 
     const deleteBlindLevel = (id) => {
         setSettings((prev) => {
@@ -616,7 +720,7 @@ export default function JPBTPage({ players: seedPlayers }) {
         setJackpotWins((prev) => prev.filter((item) => item.id !== id));
     };
 
-    const summary = useMemo(() => {
+    const summary = (() => {
         const baseAmount =
             Number(settings.buyIn || 0) -
             Number(settings.jackpot || 0) -
@@ -719,7 +823,7 @@ export default function JPBTPage({ players: seedPlayers }) {
 
         const check = withPrize.reduce((sum, row) => sum + row.net, 0);
         return { players: withPrize, totalPrize, totalPoints, check, koMoneyByRound };
-    }, [players, rows, settings, jackpotWins, profitByRound]);
+    })();
 
     const jackpotTotalContribAuto = useMemo(
         () =>
