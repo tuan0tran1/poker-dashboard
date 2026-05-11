@@ -63,8 +63,17 @@ function normalizeNotes(notes) {
     return nextNotes;
 }
 
-function rankOptions(count) {
-    return ["NA", ...Array.from({ length: count }, (_, i) => `Top ${i + 1}`)];
+function rankOptions(count, row, playerId) {
+    const currentRank = row.rank?.[playerId] ?? "NA";
+    const selectedByOthers = new Set(
+        Object.entries(row.rank ?? {})
+            .filter(([id, rank]) => id !== playerId && rank !== "NA")
+            .map(([, rank]) => rank)
+    );
+
+    return ["NA", ...Array.from({ length: count }, (_, i) => `Top ${i + 1}`)].filter(
+        (option) => option === "NA" || option === currentRank || !selectedByOthers.has(option)
+    );
 }
 
 function rankColorClass(rank) {
@@ -185,6 +194,7 @@ export default function OmahaPage({ players: seedPlayers }) {
     const [editingPlayerName, setEditingPlayerName] = useState("");
     const [blindLevelError, setBlindLevelError] = useState("");
     const [toast, setToast] = useState(null);
+    const [selectedHistoryRound, setSelectedHistoryRound] = useState("");
     const [cloudReady, setCloudReady] = useState(!isSupabaseConfigured);
     const hasLoadedCloudRef = useRef(false);
 
@@ -482,12 +492,27 @@ export default function OmahaPage({ players: seedPlayers }) {
         return names.length > 0 ? names.join(", ") : "-";
     };
 
+    const formatRebuyNames = (row) => {
+        const names = players
+            .filter((player) => row.attendance?.[player.id] && row.rebuys?.[player.id])
+            .map((player) => player.name);
+        return names.length > 0 ? names.join(", ") : "-";
+    };
+
+    const formatRankNames = (row) => {
+        const ranks = players
+            .filter((player) => row.attendance?.[player.id])
+            .map((player) => `${player.name}: ${row.rank?.[player.id] === "NA" ? "N/A" : row.rank?.[player.id] ?? "N/A"}`);
+        return ranks.length > 0 ? ranks.join(", ") : "-";
+    };
+
     const addRound = () => {
         const currentRow = rows.at(-1);
         if (currentRow && isBlankRow(currentRow, players)) {
             showToast("Lần chơi hiện tại chưa có dữ liệu điểm danh.", "error");
             return;
         }
+        setSelectedHistoryRound("");
         setRows((prev) => [
             ...prev.map((row, index) =>
                 index === prev.length - 1 ? { ...row, date: row.date || getTodayDateInputValue() } : row
@@ -604,19 +629,6 @@ export default function OmahaPage({ players: seedPlayers }) {
         }
     };
 
-    const noteBox = (
-        <div className="editor-block">
-            <h3>Note - {subTab}</h3>
-            <textarea
-                className="note-input"
-                rows={3}
-                value={notes[subTab] ?? ""}
-                onChange={(e) => setNotes((prev) => ({ ...prev, [subTab]: e.target.value }))}
-                placeholder="Ghi chú cho phần này..."
-            />
-        </div>
-    );
-
     const addPlayer = () => {
         const name = newPlayerName.trim();
         if (!name) return;
@@ -686,8 +698,31 @@ export default function OmahaPage({ players: seedPlayers }) {
         });
     };
 
-    const currentAttendanceRow = rows.at(-1);
-    const attendanceHistoryRows = rows.slice(0, -1);
+    const latestAttendanceRow = rows.at(-1);
+    const selectedHistoryRow = rows.find((row) => String(row.round) === selectedHistoryRound);
+    const selectedHistoryRoundValue = selectedHistoryRow ? selectedHistoryRound : "";
+    const currentAttendanceRow = selectedHistoryRow ?? latestAttendanceRow;
+    const attendanceHistoryRows = [...rows.slice(0, -1)].sort((a, b) => {
+        const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
+        return dateCompare || Number(b.round) - Number(a.round);
+    });
+    const historyEditSelect = (
+        <div className="form-grid">
+            <label>
+                Chọn ngày/lần chơi để chỉnh sửa
+                <select value={selectedHistoryRoundValue} onChange={(e) => setSelectedHistoryRound(e.target.value)}>
+                    <option value="">
+                        Lần hiện tại {latestAttendanceRow ? `${latestAttendanceRow.round} - ${latestAttendanceRow.date || "Chưa có ngày"}` : ""}
+                    </option>
+                    {attendanceHistoryRows.map((row) => (
+                        <option key={row.round} value={row.round}>
+                            Lần {row.round} - {row.date || "Chưa có ngày"}
+                        </option>
+                    ))}
+                </select>
+            </label>
+        </div>
+    );
 
     return (
         <div className="stack">
@@ -843,6 +878,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                         )}
                     </div>
                     <h3>Lịch sử người tham gia</h3>
+                    {historyEditSelect}
                     <table className="data-table desktop-view">
                         <thead>
                             <tr>
@@ -885,7 +921,6 @@ export default function OmahaPage({ players: seedPlayers }) {
                             <div className="mobile-round-card">Chưa có lịch sử.</div>
                         )}
                     </div>
-                    {noteBox}
                 </div>
             )}
 
@@ -902,17 +937,17 @@ export default function OmahaPage({ players: seedPlayers }) {
                             </tr>
                         </thead>
                         <tbody>
-                            {rows.map((row) => (
-                                <tr key={row.round}>
-                                    <td>{row.round}</td>
+                            {currentAttendanceRow && (
+                                <tr key={currentAttendanceRow.round}>
+                                    <td>{currentAttendanceRow.round}</td>
                                     {players.map((p) => (
                                         <td key={p.id}>
                                             <input
                                                 type="checkbox"
-                                                checked={Boolean(row.attendance[p.id]) && Boolean(row.rebuys[p.id])}
-                                                disabled={!row.attendance[p.id]}
+                                                checked={Boolean(currentAttendanceRow.attendance[p.id]) && Boolean(currentAttendanceRow.rebuys[p.id])}
+                                                disabled={!currentAttendanceRow.attendance[p.id]}
                                                 onChange={(e) =>
-                                                    updateRow(row.round, (r) => ({
+                                                    updateRow(currentAttendanceRow.round, (r) => ({
                                                         ...r,
                                                         rebuys: {
                                                             ...r.rebuys,
@@ -923,18 +958,18 @@ export default function OmahaPage({ players: seedPlayers }) {
                                             />
                                         </td>
                                     ))}
-                                    <td>{players.some((p) => row.attendance[p.id]) ? "TRUE" : "FALSE"}</td>
-                                    <td>{row.date}</td>
+                                    <td>{players.some((p) => currentAttendanceRow.attendance[p.id]) ? "TRUE" : "FALSE"}</td>
+                                    <td>{currentAttendanceRow.date}</td>
                                 </tr>
-                            ))}
+                            )}
                         </tbody>
                     </table>
                     <div className="mobile-round-list">
-                        {rows.map((row) => (
-                            <div className="mobile-round-card" key={row.round}>
+                        {currentAttendanceRow && (
+                            <div className="mobile-round-card" key={currentAttendanceRow.round}>
                                 <div className="mobile-round-header">
-                                    <strong>Lần chơi {row.round}</strong>
-                                    <span>{row.date || "Chưa có ngày"}</span>
+                                    <strong>Lần chơi {currentAttendanceRow.round}</strong>
+                                    <span>{currentAttendanceRow.date || "Chưa có ngày"}</span>
                                 </div>
                                 <div className="mobile-player-list">
                                     {players.map((p) => (
@@ -942,10 +977,10 @@ export default function OmahaPage({ players: seedPlayers }) {
                                             <span>{p.name}</span>
                                             <input
                                                 type="checkbox"
-                                                checked={Boolean(row.attendance[p.id]) && Boolean(row.rebuys[p.id])}
-                                                disabled={!row.attendance[p.id]}
+                                                checked={Boolean(currentAttendanceRow.attendance[p.id]) && Boolean(currentAttendanceRow.rebuys[p.id])}
+                                                disabled={!currentAttendanceRow.attendance[p.id]}
                                                 onChange={(e) =>
-                                                    updateRow(row.round, (r) => ({
+                                                    updateRow(currentAttendanceRow.round, (r) => ({
                                                         ...r,
                                                         rebuys: {
                                                             ...r.rebuys,
@@ -958,9 +993,49 @@ export default function OmahaPage({ players: seedPlayers }) {
                                     ))}
                                 </div>
                             </div>
-                        ))}
+                        )}
                     </div>
-                    {noteBox}
+                    <h3>Lịch sử rebuys</h3>
+                    {historyEditSelect}
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                <th>Date</th>
+                                <th>Người rebuy</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {attendanceHistoryRows.length > 0 ? (
+                                attendanceHistoryRows.map((row) => (
+                                    <tr key={row.round}>
+                                        <td>{row.round}</td>
+                                        <td>{row.date}</td>
+                                        <td>{formatRebuyNames(row)}</td>
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr>
+                                    <td colSpan={3}>Chưa có lịch sử.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {attendanceHistoryRows.length > 0 ? (
+                            attendanceHistoryRows.map((row) => (
+                                <div className="mobile-round-card" key={row.round}>
+                                    <div className="mobile-round-header">
+                                        <strong>Lần chơi {row.round}</strong>
+                                        <span>{row.date || "Chưa có ngày"}</span>
+                                    </div>
+                                    <p>{formatRebuyNames(row)}</p>
+                                </div>
+                            ))
+                        ) : (
+                            <p>Chưa có lịch sử.</p>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -977,23 +1052,23 @@ export default function OmahaPage({ players: seedPlayers }) {
                             </tr>
                         </thead>
                         <tbody>
-                            {rows.map((row) => (
-                                <tr key={row.round}>
-                                    <td>{row.round}</td>
+                            {currentAttendanceRow && (
+                                <tr key={currentAttendanceRow.round}>
+                                    <td>{currentAttendanceRow.round}</td>
                                     {players.map((p) => (
                                         <td key={p.id}>
                                             <select
-                                                className={`rank-select ${rankColorClass(row.rank[p.id])}`}
-                                                value={row.rank[p.id] ?? "NA"}
-                                                disabled={!row.attendance[p.id]}
+                                                className={`rank-select ${rankColorClass(currentAttendanceRow.rank[p.id])}`}
+                                                value={currentAttendanceRow.rank[p.id] ?? "NA"}
+                                                disabled={!currentAttendanceRow.attendance[p.id]}
                                                 onChange={(e) =>
-                                                    updateRow(row.round, (r) => ({
+                                                    updateRow(currentAttendanceRow.round, (r) => ({
                                                         ...r,
                                                         rank: { ...r.rank, [p.id]: e.target.value }
                                                     }))
                                                 }
                                             >
-                                                {rankOptions(players.length).map((option) => (
+                                                {rankOptions(players.length, currentAttendanceRow, p.id).map((option) => (
                                                     <option key={option} value={option}>
                                                         {option === "NA" ? "N/A" : option}
                                                     </option>
@@ -1001,35 +1076,35 @@ export default function OmahaPage({ players: seedPlayers }) {
                                             </select>
                                         </td>
                                     ))}
-                                    <td>{players.some((p) => row.attendance[p.id]) ? "TRUE" : "FALSE"}</td>
-                                    <td>{row.date}</td>
+                                    <td>{players.some((p) => currentAttendanceRow.attendance[p.id]) ? "TRUE" : "FALSE"}</td>
+                                    <td>{currentAttendanceRow.date}</td>
                                 </tr>
-                            ))}
+                            )}
                         </tbody>
                     </table>
                     <div className="mobile-round-list">
-                        {rows.map((row) => (
-                            <div className="mobile-round-card" key={row.round}>
+                        {currentAttendanceRow && (
+                            <div className="mobile-round-card" key={currentAttendanceRow.round}>
                                 <div className="mobile-round-header">
-                                    <strong>Lần chơi {row.round}</strong>
-                                    <span>{row.date || "Chưa có ngày"}</span>
+                                    <strong>Lần chơi {currentAttendanceRow.round}</strong>
+                                    <span>{currentAttendanceRow.date || "Chưa có ngày"}</span>
                                 </div>
                                 <div className="mobile-player-list">
                                     {players.map((p) => (
                                         <label className="mobile-player-row" key={p.id}>
                                             <span>{p.name}</span>
                                             <select
-                                                className={`rank-select ${rankColorClass(row.rank[p.id])}`}
-                                                value={row.rank[p.id] ?? "NA"}
-                                                disabled={!row.attendance[p.id]}
+                                                className={`rank-select ${rankColorClass(currentAttendanceRow.rank[p.id])}`}
+                                                value={currentAttendanceRow.rank[p.id] ?? "NA"}
+                                                disabled={!currentAttendanceRow.attendance[p.id]}
                                                 onChange={(e) =>
-                                                    updateRow(row.round, (r) => ({
+                                                    updateRow(currentAttendanceRow.round, (r) => ({
                                                         ...r,
                                                         rank: { ...r.rank, [p.id]: e.target.value }
                                                     }))
                                                 }
                                             >
-                                                {rankOptions(players.length).map((option) => (
+                                                {rankOptions(players.length, currentAttendanceRow, p.id).map((option) => (
                                                     <option key={option} value={option}>
                                                         {option === "NA" ? "N/A" : option}
                                                     </option>
@@ -1039,16 +1114,56 @@ export default function OmahaPage({ players: seedPlayers }) {
                                     ))}
                                 </div>
                             </div>
-                        ))}
+                        )}
                     </div>
-                    {noteBox}
+                    <h3>Lịch sử rank</h3>
+                    {historyEditSelect}
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                <th>Date</th>
+                                <th>Rank</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {attendanceHistoryRows.length > 0 ? (
+                                attendanceHistoryRows.map((row) => (
+                                    <tr key={row.round}>
+                                        <td>{row.round}</td>
+                                        <td>{row.date}</td>
+                                        <td>{formatRankNames(row)}</td>
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr>
+                                    <td colSpan={3}>Chưa có lịch sử.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {attendanceHistoryRows.length > 0 ? (
+                            attendanceHistoryRows.map((row) => (
+                                <div className="mobile-round-card" key={row.round}>
+                                    <div className="mobile-round-header">
+                                        <strong>Lần chơi {row.round}</strong>
+                                        <span>{row.date || "Chưa có ngày"}</span>
+                                    </div>
+                                    <p>{formatRankNames(row)}</p>
+                                </div>
+                            ))
+                        ) : (
+                            <p>Chưa có lịch sử.</p>
+                        )}
+                    </div>
                 </div>
             )}
 
             {subTab === "Profit" && (
                 <div className="card">
                     <h2>Profit</h2>
-                    <table className="data-table desktop-view">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
@@ -1070,29 +1185,6 @@ export default function OmahaPage({ players: seedPlayers }) {
                             ))}
                         </tbody>
                     </table>
-                    <div className="mobile-round-list">
-                        {rows.map((row) => (
-                            <div className="mobile-round-card" key={row.round}>
-                                <div className="mobile-round-header">
-                                    <strong>Lần chơi {row.round}</strong>
-                                    <span>{row.date || "Chưa có ngày"}</span>
-                                </div>
-                                <div className="mobile-player-list">
-                                    {players.map((p) => (
-                                        <div className="mobile-player-row" key={p.id}>
-                                            <span>{p.name}</span>
-                                            <strong>
-                                                {row.attendance[p.id]
-                                                    ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
-                                                    : ""}
-                                            </strong>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                    {noteBox}
                 </div>
             )}
 
@@ -1107,7 +1199,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                             Reset
                         </button>
                     </div>
-                    <table className="data-table">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Người chơi</th>
@@ -1138,7 +1230,6 @@ export default function OmahaPage({ players: seedPlayers }) {
                         <div>Tổng pot: {formatCurrency(summary.totalPot)}</div>
                         <div>Tổng điểm: {summary.totalPoints}</div>
                     </div>
-                    {noteBox}
                 </div>
             )}
 
@@ -1167,7 +1258,6 @@ export default function OmahaPage({ players: seedPlayers }) {
                             ))}
                         </tbody>
                     </table>
-                    {noteBox}
                 </div>
             )}
 
@@ -1355,7 +1445,6 @@ export default function OmahaPage({ players: seedPlayers }) {
                             ))}
                         </tbody>
                     </table>
-                    {noteBox}
                 </div>
             )}
         </div>
