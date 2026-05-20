@@ -1334,20 +1334,76 @@ export default function JPBTPage({ players: seedPlayers }) {
                             </tr>
                         </thead>
                         <tbody>
-                            {rows.map((row) => (
-                                <tr key={row.round}>
-                                    <td>{row.round}</td>
+                            {currentAttendanceRow && (
+                                <tr key={currentAttendanceRow.round}>
+                                    <td>{currentAttendanceRow.round}</td>
                                     {players.map((p) => (
                                         <td key={p.id}>
-                                            {row.attendance[p.id]
-                                                ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
+                                            {currentAttendanceRow.attendance[p.id]
+                                                ? formatCurrency(Number(profitByRound[currentAttendanceRow.round]?.[p.id] ?? 0))
                                                 : ""}
                                         </td>
                                     ))}
                                 </tr>
-                            ))}
+                            )}
                         </tbody>
                     </table>
+                    <h3>Lịch sử profit</h3>
+                    {historyEditSelect}
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {attendanceHistoryRows.length > 0 ? (
+                                attendanceHistoryRows.map((row) => (
+                                    <tr key={row.round}>
+                                        <td>{row.round}</td>
+                                        {players.map((p) => (
+                                            <td key={p.id}>
+                                                {row.attendance[p.id]
+                                                    ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
+                                                    : ""}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr>
+                                    <td colSpan={players.length + 1}>Chưa có lịch sử.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {attendanceHistoryRows.length > 0 ? (
+                            attendanceHistoryRows.map((row) => (
+                                <div className="mobile-round-card" key={row.round}>
+                                    <div className="mobile-round-header">
+                                        <strong>Lần chơi {row.round}</strong>
+                                        <span>{row.date || "Chưa có ngày"}</span>
+                                    </div>
+                                    <div className="mobile-player-list">
+                                        {players.map((p) => (
+                                            <div className="mobile-player-row" key={p.id}>
+                                                <span>{p.name}</span>
+                                                <strong>
+                                                    {row.attendance[p.id]
+                                                        ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
+                                                        : ""}
+                                                </strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="mobile-round-card">Chưa có lịch sử.</div>
+                        )}
+                    </div>
                 </div>
             )}
 
