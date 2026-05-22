@@ -431,18 +431,6 @@ export default function JPBTPage({ players: seedPlayers }) {
         }));
     };
 
-    const formatAttendanceNames = (row) => {
-        const names = players.filter((player) => row.attendance?.[player.id]).map((player) => player.name);
-        return names.length > 0 ? names.join(", ") : "-";
-    };
-
-    const formatRebuyNames = (row) => {
-        const names = players
-            .filter((player) => row.attendance?.[player.id] && row.rebuys?.[player.id])
-            .map((player) => player.name);
-        return names.length > 0 ? names.join(", ") : "-";
-    };
-
     const addRound = () => {
         const currentRow = rows.at(-1);
         if (currentRow && isBlankRow(currentRow, players)) {
@@ -1045,12 +1033,11 @@ export default function JPBTPage({ players: seedPlayers }) {
                     </div>
                     <h3>Lịch sử người tham gia</h3>
                     {historyEditSelect}
-                    <table className="data-table desktop-view">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
-                                <th>Date</th>
-                                <th>Người tham gia</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
                             </tr>
                         </thead>
                         <tbody>
@@ -1058,35 +1045,18 @@ export default function JPBTPage({ players: seedPlayers }) {
                                 attendanceHistoryRows.map((row) => (
                                     <tr key={row.round}>
                                         <td>{row.round}</td>
-                                        <td>{row.date}</td>
-                                        <td>{formatAttendanceNames(row)}</td>
+                                        {players.map((p) => (
+                                            <td key={p.id}>{row.attendance[p.id] ? "✓" : ""}</td>
+                                        ))}
                                     </tr>
                                 ))
                             ) : (
                                 <tr>
-                                    <td colSpan={3}>Chưa có lịch sử.</td>
+                                    <td colSpan={players.length + 1}>Chưa có lịch sử.</td>
                                 </tr>
                             )}
                         </tbody>
                     </table>
-                    <div className="mobile-round-list">
-                        {attendanceHistoryRows.length > 0 ? (
-                            attendanceHistoryRows.map((row) => (
-                                <div className="mobile-round-card" key={row.round}>
-                                    <div className="mobile-round-header">
-                                        <strong>Lần chơi {row.round}</strong>
-                                        <span>{row.date || "Chưa có ngày"}</span>
-                                    </div>
-                                    <div className="mobile-player-row">
-                                        <span>Người tham gia</span>
-                                        <strong>{formatAttendanceNames(row)}</strong>
-                                    </div>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="mobile-round-card">Chưa có lịch sử.</div>
-                        )}
-                    </div>
                 </div>
             )}
 
@@ -1161,12 +1131,11 @@ export default function JPBTPage({ players: seedPlayers }) {
                     </div>
                     <h3>Lịch sử rebuys</h3>
                     {historyEditSelect}
-                    <table className="data-table desktop-view">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
-                                <th>Date</th>
-                                <th>Người rebuy</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
                             </tr>
                         </thead>
                         <tbody>
@@ -1174,32 +1143,20 @@ export default function JPBTPage({ players: seedPlayers }) {
                                 attendanceHistoryRows.map((row) => (
                                     <tr key={row.round}>
                                         <td>{row.round}</td>
-                                        <td>{row.date}</td>
-                                        <td>{formatRebuyNames(row)}</td>
+                                        {players.map((p) => (
+                                            <td key={p.id}>
+                                                {row.attendance[p.id] && row.rebuys[p.id] ? "✓" : ""}
+                                            </td>
+                                        ))}
                                     </tr>
                                 ))
                             ) : (
                                 <tr>
-                                    <td colSpan={3}>Chưa có lịch sử.</td>
+                                    <td colSpan={players.length + 1}>Chưa có lịch sử.</td>
                                 </tr>
                             )}
                         </tbody>
                     </table>
-                    <div className="mobile-round-list">
-                        {attendanceHistoryRows.length > 0 ? (
-                            attendanceHistoryRows.map((row) => (
-                                <div className="mobile-round-card" key={row.round}>
-                                    <div className="mobile-round-header">
-                                        <strong>Lần chơi {row.round}</strong>
-                                        <span>{row.date || "Chưa có ngày"}</span>
-                                    </div>
-                                    <p>{formatRebuyNames(row)}</p>
-                                </div>
-                            ))
-                        ) : (
-                            <p>Chưa có lịch sử.</p>
-                        )}
-                    </div>
                 </div>
             )}
 
@@ -1556,7 +1513,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                     <div className="row-actions">
                         <button className="btn btn-primary" onClick={addJackpotWin}>Thêm dòng ăn jackpot</button>
                     </div>
-                    <table className="data-table">
+                    <table className="data-table jackpot-wins-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>

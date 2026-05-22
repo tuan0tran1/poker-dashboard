@@ -394,6 +394,61 @@ input[type="checkbox"] {
   color: #ff8a84;
 }
 
+.combined-summary-note {
+  color: #aab4d2;
+  font-size: 14px;
+  margin: 0 0 14px;
+}
+
+.combined-summary-grid {
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+}
+
+.combined-total-net {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+  text-align: center;
+}
+
+.combined-total-net span {
+  color: #d4bc6a;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.combined-total-net strong {
+  font-size: 1.35rem;
+}
+
+.combined-net-table th:last-child,
+.combined-net-table td:last-child {
+  background: rgba(34, 48, 74, 0.55);
+}
+
+.jackpot-wins-table th:first-child,
+.jackpot-wins-table td:first-child {
+  width: 4.15rem;
+  min-width: 4.15rem;
+  max-width: 4.15rem;
+  padding-left: 6px;
+  padding-right: 6px;
+  text-align: center;
+}
+
+.jackpot-wins-table td:first-child input {
+  box-sizing: border-box;
+  min-width: 0;
+  padding-left: 4px;
+  padding-right: 4px;
+  text-align: center;
+  width: 100%;
+}
+
 .mobile-round-list {
   display: none;
 }
@@ -495,6 +550,13 @@ input[type="checkbox"] {
     min-width: 76px;
   }
 
+  .jackpot-wins-table th:first-child,
+  .jackpot-wins-table td:first-child {
+    min-width: 42px;
+    max-width: 42px;
+    width: 42px;
+  }
+
   .desktop-view {
     display: none;
   }
@@ -586,6 +648,10 @@ input[type="checkbox"] {
   }
 
   .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .combined-summary-grid {
     grid-template-columns: 1fr;
   }
 
