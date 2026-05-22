@@ -3,6 +3,7 @@ import { formatCurrency } from "../utils/finance";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
 const JPBT_STORAGE_KEY = "jpbt-workspace-v1";
+const JPBT_SUBTAB_KEY = "jpbt-subtab-v1";
 const SUB_TABS = ["Điểm danh", "Rebuys", "Rank", "Profit", "Tổng kết", "Bounty", "Jackpot", "Thống kê top", "Settings"];
 const TAB_LABEL_MIGRATIONS = {
     "Diem danh": "Điểm danh",
@@ -244,7 +245,10 @@ export default function JPBTPage({ players: seedPlayers }) {
         }
     });
 
-    const [subTab, setSubTab] = useState("Điểm danh");
+    const [subTab, setSubTab] = useState(() => {
+        const saved = localStorage.getItem(JPBT_SUBTAB_KEY);
+        return SUB_TABS.includes(saved) ? saved : "Điểm danh";
+    });
     const [players, setPlayers] = useState(initialData.players);
     const [rows, setRows] = useState(initialData.rows);
     const [settings, setSettings] = useState(initialData.settings);
@@ -267,6 +271,10 @@ export default function JPBTPage({ players: seedPlayers }) {
         const timeoutId = window.setTimeout(() => setToast(null), 4500);
         return () => window.clearTimeout(timeoutId);
     }, [toast]);
+
+    useEffect(() => {
+        localStorage.setItem(JPBT_SUBTAB_KEY, subTab);
+    }, [subTab]);
 
     const showToast = (message, type = "info") => {
         setToast({ message, type });
@@ -1350,7 +1358,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                     </table>
                     <h3>Lịch sử profit</h3>
                     {historyEditSelect}
-                    <table className="data-table desktop-view">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
@@ -1378,32 +1386,6 @@ export default function JPBTPage({ players: seedPlayers }) {
                             )}
                         </tbody>
                     </table>
-                    <div className="mobile-round-list">
-                        {attendanceHistoryRows.length > 0 ? (
-                            attendanceHistoryRows.map((row) => (
-                                <div className="mobile-round-card" key={row.round}>
-                                    <div className="mobile-round-header">
-                                        <strong>Lần chơi {row.round}</strong>
-                                        <span>{row.date || "Chưa có ngày"}</span>
-                                    </div>
-                                    <div className="mobile-player-list">
-                                        {players.map((p) => (
-                                            <div className="mobile-player-row" key={p.id}>
-                                                <span>{p.name}</span>
-                                                <strong>
-                                                    {row.attendance[p.id]
-                                                        ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
-                                                        : ""}
-                                                </strong>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="mobile-round-card">Chưa có lịch sử.</div>
-                        )}
-                    </div>
                 </div>
             )}
 
@@ -1461,7 +1443,7 @@ export default function JPBTPage({ players: seedPlayers }) {
             {subTab === "Bounty" && (
                 <div className="card">
                     <h2>Bounty</h2>
-                    <table className="data-table">
+                    <table className="data-table desktop-view">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
@@ -1470,20 +1452,20 @@ export default function JPBTPage({ players: seedPlayers }) {
                             </tr>
                         </thead>
                         <tbody>
-                            {rows.map((row) => (
-                                <tr key={row.round}>
-                                    <td>{row.round}</td>
+                            {currentAttendanceRow && (
+                                <tr key={currentAttendanceRow.round}>
+                                    <td>{currentAttendanceRow.round}</td>
                                     {players.map((p) => (
                                         <td key={p.id}>
                                             <input
                                                 type="number"
-                                                value={row.bounty[p.id] ?? ""}
+                                                value={currentAttendanceRow.bounty[p.id] ?? ""}
                                                 placeholder="Số K/O"
                                                 min={0}
                                                 step={1}
-                                                disabled={!row.attendance[p.id]}
+                                                disabled={!currentAttendanceRow.attendance[p.id]}
                                                 onChange={(e) =>
-                                                    updateRow(row.round, (r) => ({
+                                                    updateRow(currentAttendanceRow.round, (r) => ({
                                                         ...r,
                                                         bounty: { ...r.bounty, [p.id]: e.target.value }
                                                     }))
@@ -1492,14 +1474,115 @@ export default function JPBTPage({ players: seedPlayers }) {
                                         </td>
                                     ))}
                                     <td>
-                                        {summary.koMoneyByRound[row.round] === ""
+                                        {summary.koMoneyByRound[currentAttendanceRow.round] === ""
                                             ? ""
-                                            : formatCurrency(summary.koMoneyByRound[row.round] ?? 0)}
+                                            : formatCurrency(summary.koMoneyByRound[currentAttendanceRow.round] ?? 0)}
                                     </td>
                                 </tr>
-                            ))}
+                            )}
                         </tbody>
                     </table>
+                    <div className="mobile-round-list">
+                        {currentAttendanceRow && (
+                            <div className="mobile-round-card" key={currentAttendanceRow.round}>
+                                <div className="mobile-round-header">
+                                    <strong>Lần chơi {currentAttendanceRow.round}</strong>
+                                    <span>
+                                        Tiền K/O:{" "}
+                                        {summary.koMoneyByRound[currentAttendanceRow.round] === ""
+                                            ? "-"
+                                            : formatCurrency(summary.koMoneyByRound[currentAttendanceRow.round] ?? 0)}
+                                    </span>
+                                </div>
+                                <div className="mobile-player-list">
+                                    {players.map((p) => (
+                                        <label className="mobile-player-row" key={p.id}>
+                                            <span>{p.name}</span>
+                                            <input
+                                                type="number"
+                                                value={currentAttendanceRow.bounty[p.id] ?? ""}
+                                                placeholder="Số K/O"
+                                                min={0}
+                                                step={1}
+                                                disabled={!currentAttendanceRow.attendance[p.id]}
+                                                onChange={(e) =>
+                                                    updateRow(currentAttendanceRow.round, (r) => ({
+                                                        ...r,
+                                                        bounty: { ...r.bounty, [p.id]: e.target.value }
+                                                    }))
+                                                }
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    <h3>Lịch sử bounty</h3>
+                    {historyEditSelect}
+                    <table className="data-table desktop-view">
+                        <thead>
+                            <tr>
+                                <th>Lần chơi</th>
+                                <th>Date</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
+                                <th>Tiền K/O</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {attendanceHistoryRows.length > 0 ? (
+                                attendanceHistoryRows.map((row) => (
+                                    <tr key={row.round}>
+                                        <td>{row.round}</td>
+                                        <td>{row.date}</td>
+                                        {players.map((p) => (
+                                            <td key={p.id}>
+                                                {row.attendance[p.id] ? row.bounty[p.id] ?? "0" : ""}
+                                            </td>
+                                        ))}
+                                        <td>
+                                            {summary.koMoneyByRound[row.round] === ""
+                                                ? ""
+                                                : formatCurrency(summary.koMoneyByRound[row.round] ?? 0)}
+                                        </td>
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr>
+                                    <td colSpan={players.length + 3}>Chưa có lịch sử.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                    <div className="mobile-round-list">
+                        {attendanceHistoryRows.length > 0 ? (
+                            attendanceHistoryRows.map((row) => (
+                                <div className="mobile-round-card" key={row.round}>
+                                    <div className="mobile-round-header">
+                                        <strong>Lần chơi {row.round}</strong>
+                                        <span>
+                                            Tiền K/O:{" "}
+                                            {summary.koMoneyByRound[row.round] === ""
+                                                ? "-"
+                                                : formatCurrency(summary.koMoneyByRound[row.round] ?? 0)}
+                                        </span>
+                                    </div>
+                                    <div className="mobile-player-list">
+                                        {players.map((p) => (
+                                            <div className="mobile-player-row" key={p.id}>
+                                                <span>{p.name}</span>
+                                                <strong>
+                                                    {row.attendance[p.id] ? row.bounty[p.id] ?? "0" : "-"}
+                                                </strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="mobile-round-card">Chưa có lịch sử.</div>
+                        )}
+                    </div>
                 </div>
             )}
 

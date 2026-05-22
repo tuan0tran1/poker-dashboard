@@ -3,6 +3,7 @@ import { formatCurrency } from "../utils/finance";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
 const OMAHA_STORAGE_KEY = "omaha-workspace-v1";
+const OMAHA_SUBTAB_KEY = "omaha-subtab-v1";
 const SUB_TABS = ["Điểm danh", "Rebuys", "Rank", "Profit", "Tổng kết", "Thống kê top", "Settings"];
 const TAB_LABEL_MIGRATIONS = {
     "Diem danh": "Điểm danh",
@@ -181,7 +182,10 @@ export default function OmahaPage({ players: seedPlayers }) {
         }
     });
 
-    const [subTab, setSubTab] = useState("Điểm danh");
+    const [subTab, setSubTab] = useState(() => {
+        const saved = localStorage.getItem(OMAHA_SUBTAB_KEY);
+        return SUB_TABS.includes(saved) ? saved : "Điểm danh";
+    });
     const [players, setPlayers] = useState(initialData.players);
     const [rows, setRows] = useState(initialData.rows);
     const [settings, setSettings] = useState({
@@ -203,6 +207,10 @@ export default function OmahaPage({ players: seedPlayers }) {
         const timeoutId = window.setTimeout(() => setToast(null), 4500);
         return () => window.clearTimeout(timeoutId);
     }, [toast]);
+
+    useEffect(() => {
+        localStorage.setItem(OMAHA_SUBTAB_KEY, subTab);
+    }, [subTab]);
 
     const showToast = (message, type = "info") => {
         setToast({ message, type });
@@ -1187,7 +1195,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                     </table>
                     <h3>Lịch sử profit</h3>
                     {historyEditSelect}
-                    <table className="data-table desktop-view">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
@@ -1215,32 +1223,6 @@ export default function OmahaPage({ players: seedPlayers }) {
                             )}
                         </tbody>
                     </table>
-                    <div className="mobile-round-list">
-                        {attendanceHistoryRows.length > 0 ? (
-                            attendanceHistoryRows.map((row) => (
-                                <div className="mobile-round-card" key={row.round}>
-                                    <div className="mobile-round-header">
-                                        <strong>Lần chơi {row.round}</strong>
-                                        <span>{row.date || "Chưa có ngày"}</span>
-                                    </div>
-                                    <div className="mobile-player-list">
-                                        {players.map((p) => (
-                                            <div className="mobile-player-row" key={p.id}>
-                                                <span>{p.name}</span>
-                                                <strong>
-                                                    {row.attendance[p.id]
-                                                        ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
-                                                        : ""}
-                                                </strong>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="mobile-round-card">Chưa có lịch sử.</div>
-                        )}
-                    </div>
                 </div>
             )}
 
