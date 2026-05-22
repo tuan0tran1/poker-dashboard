@@ -18,6 +18,10 @@ const JACKPOT_TYPES = [
     { key: "Royal Flush", percent: 1 }
 ];
 
+function sortJackpotWinsNewestFirst(wins) {
+    return [...wins].sort((a, b) => Number(b.id) - Number(a.id));
+}
+
 function getTodayDateInputValue() {
     const today = new Date();
     const year = today.getFullYear();
@@ -235,7 +239,9 @@ export default function JPBTPage({ players: seedPlayers }) {
                     )
                 },
                 notes: normalizeNotes(parsed.notes),
-                jackpotWins: Array.isArray(parsed.jackpotWins) ? parsed.jackpotWins : []
+                jackpotWins: sortJackpotWinsNewestFirst(
+                    Array.isArray(parsed.jackpotWins) ? parsed.jackpotWins : []
+                )
             };
         } catch {
             return { players: defaultPlayers, rows: defaultRows, settings: defaultSettings, notes: defaultNotes(), jackpotWins: [] };
@@ -301,7 +307,9 @@ export default function JPBTPage({ players: seedPlayers }) {
                 : createRows(nextPlayers),
             settings: nextSettings,
             notes: normalizeNotes(workspaceData.notes),
-            jackpotWins: Array.isArray(workspaceData.jackpotWins) ? workspaceData.jackpotWins : []
+            jackpotWins: sortJackpotWinsNewestFirst(
+                Array.isArray(workspaceData.jackpotWins) ? workspaceData.jackpotWins : []
+            )
         };
     };
 
@@ -320,7 +328,7 @@ export default function JPBTPage({ players: seedPlayers }) {
         rows,
         settings,
         notes,
-        jackpotWins
+        jackpotWins: sortJackpotWinsNewestFirst(jackpotWins)
     });
 
     useEffect(() => {
@@ -560,7 +568,9 @@ export default function JPBTPage({ players: seedPlayers }) {
             );
             setSettings(nextSettings);
             setNotes(normalizeNotes(imported.notes));
-            setJackpotWins(Array.isArray(imported.jackpotWins) ? imported.jackpotWins : []);
+            setJackpotWins(
+                sortJackpotWinsNewestFirst(Array.isArray(imported.jackpotWins) ? imported.jackpotWins : [])
+            );
             showToast("Đã auto-backup và import JSON.");
         } catch {
             showToast("File backup JSON không hợp lệ.", "error");
@@ -721,10 +731,10 @@ export default function JPBTPage({ players: seedPlayers }) {
     const addJackpotWin = () => {
         setJackpotWins((prev) => {
             const nextId = prev.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1;
-            return [
+            return sortJackpotWinsNewestFirst([
                 { id: nextId, round: 1, winnerId: players[0]?.id ?? "", type: "Tu Quy", amount: 0 },
                 ...prev
-            ];
+            ]);
         });
     };
 
@@ -858,6 +868,7 @@ export default function JPBTPage({ players: seedPlayers }) {
         () => jackpotWins.reduce((sum, item) => sum + Number(item.amount ?? 0), 0),
         [jackpotWins]
     );
+    const jackpotWinsSorted = useMemo(() => sortJackpotWinsNewestFirst(jackpotWins), [jackpotWins]);
     const jackpotRemain = jackpotTotalContrib - jackpotPaid;
     const latestAttendanceRow = rows.at(-1);
     const selectedHistoryRow = rows.find((row) => String(row.round) === selectedHistoryRound);
@@ -1556,7 +1567,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                             </tr>
                         </thead>
                         <tbody>
-                            {jackpotWins.map((item) => (
+                            {jackpotWinsSorted.map((item) => (
                                 <tr key={item.id}>
                                     <td>
                                         <input
