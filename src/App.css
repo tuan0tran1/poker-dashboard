@@ -358,6 +358,42 @@ input[type="checkbox"] {
   padding: 12px;
 }
 
+.jackpot-summary {
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+}
+
+.jackpot-summary .jackpot-remain-stat {
+  grid-column: 1 / -1;
+  align-items: center;
+  background: linear-gradient(180deg, #1a2740 0%, #121c30 100%);
+  border: 2px solid #c9a227;
+  box-shadow: 0 0 24px rgba(201, 162, 39, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 16px;
+  text-align: center;
+}
+
+.jackpot-remain-label {
+  color: #d4bc6a;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.jackpot-remain-value {
+  color: #ffe08a;
+  font-size: clamp(1.75rem, 6vw, 2.75rem);
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.jackpot-remain-value.text-negative {
+  color: #ff8a84;
+}
+
 .mobile-round-list {
   display: none;
 }

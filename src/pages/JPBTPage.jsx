@@ -79,7 +79,6 @@ function createDefaultSettings(players) {
         buyIn: 200000,
         jackpot: 10000,
         bounty: 10000,
-        jackpotTotalOverride: null,
         rankPoints: createDefaultRankPoints(players.length),
         rankPointsCustomized: false,
         blindLevels: [
@@ -231,8 +230,6 @@ export default function JPBTPage({ players: seedPlayers }) {
                     ...(parsed.settings ?? defaultSettings),
                     rankPoints: nextRankPoints,
                     rankPointsCustomized,
-                    jackpotTotalOverride:
-                        parsed.settings?.jackpotTotalOverride ?? defaultSettings.jackpotTotalOverride,
                     blindLevels: normalizeBlindLevels(
                         parsed.settings?.blindLevels ?? defaultSettings.blindLevels
                     )
@@ -260,9 +257,6 @@ export default function JPBTPage({ players: seedPlayers }) {
     const [blindLevelError, setBlindLevelError] = useState("");
     const [toast, setToast] = useState(null);
     const [selectedHistoryRound, setSelectedHistoryRound] = useState("");
-    const [jackpotTotalInput, setJackpotTotalInput] = useState(
-        String(initialData.settings?.jackpotTotalOverride ?? "")
-    );
     const [cloudReady, setCloudReady] = useState(!isSupabaseConfigured);
     const hasLoadedCloudRef = useRef(false);
 
@@ -297,8 +291,6 @@ export default function JPBTPage({ players: seedPlayers }) {
                 ])
             ),
             rankPointsCustomized: Boolean(workspaceData.settings?.rankPointsCustomized),
-            jackpotTotalOverride:
-                workspaceData.settings?.jackpotTotalOverride ?? defaultSettings.jackpotTotalOverride,
             blindLevels: normalizeBlindLevels(workspaceData.settings?.blindLevels ?? defaultSettings.blindLevels)
         };
 
@@ -320,7 +312,6 @@ export default function JPBTPage({ players: seedPlayers }) {
         setSettings(nextWorkspace.settings);
         setNotes(nextWorkspace.notes);
         setJackpotWins(nextWorkspace.jackpotWins);
-        setJackpotTotalInput(String(nextWorkspace.settings.jackpotTotalOverride ?? ""));
     };
 
     const getWorkspaceData = () => ({
@@ -444,13 +435,6 @@ export default function JPBTPage({ players: seedPlayers }) {
         return names.length > 0 ? names.join(", ") : "-";
     };
 
-    const formatRankNames = (row) => {
-        const ranks = players
-            .filter((player) => row.attendance?.[player.id])
-            .map((player) => `${player.name}: ${row.rank?.[player.id] === "NA" ? "N/A" : row.rank?.[player.id] ?? "N/A"}`);
-        return ranks.length > 0 ? ranks.join(", ") : "-";
-    };
-
     const addRound = () => {
         const currentRow = rows.at(-1);
         if (currentRow && isBlankRow(currentRow, players)) {
@@ -532,7 +516,6 @@ export default function JPBTPage({ players: seedPlayers }) {
         setRows(createRows(players));
         setNotes((prev) => ({ ...defaultNotes(), Settings: prev.Settings ?? "" }));
         setJackpotWins([]);
-        setJackpotTotalInput(String(settings.jackpotTotalOverride ?? ""));
         showToast("Đã auto-backup và reset dữ liệu chơi.");
     };
 
@@ -566,8 +549,6 @@ export default function JPBTPage({ players: seedPlayers }) {
                     ])
                 ),
                 rankPointsCustomized: Boolean(imported.settings?.rankPointsCustomized),
-                jackpotTotalOverride:
-                    imported.settings?.jackpotTotalOverride ?? defaultSettings.jackpotTotalOverride,
                 blindLevels: normalizeBlindLevels(imported.settings?.blindLevels ?? defaultSettings.blindLevels)
             };
             downloadJson(`jpbt-auto-backup-before-import-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, getBackupData());
@@ -580,7 +561,6 @@ export default function JPBTPage({ players: seedPlayers }) {
             setSettings(nextSettings);
             setNotes(normalizeNotes(imported.notes));
             setJackpotWins(Array.isArray(imported.jackpotWins) ? imported.jackpotWins : []);
-            setJackpotTotalInput(String(nextSettings.jackpotTotalOverride ?? ""));
             showToast("Đã auto-backup và import JSON.");
         } catch {
             showToast("File backup JSON không hợp lệ.", "error");
@@ -739,10 +719,13 @@ export default function JPBTPage({ players: seedPlayers }) {
     };
 
     const addJackpotWin = () => {
-        setJackpotWins((prev) => [
-            ...prev,
-            { id: (prev.at(-1)?.id ?? 0) + 1, round: 1, winnerId: players[0]?.id ?? "", type: "Tu Quy", amount: 0 }
-        ]);
+        setJackpotWins((prev) => {
+            const nextId = prev.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1;
+            return [
+                { id: nextId, round: 1, winnerId: players[0]?.id ?? "", type: "Tu Quy", amount: 0 },
+                ...prev
+            ];
+        });
     };
 
     const updateJackpotWin = (id, patch) => {
@@ -870,10 +853,7 @@ export default function JPBTPage({ players: seedPlayers }) {
             ),
         [rows, players, settings.jackpot]
     );
-    const jackpotTotalContrib =
-        settings.jackpotTotalOverride === null
-            ? jackpotTotalContribAuto
-            : Number(settings.jackpotTotalOverride);
+    const jackpotTotalContrib = jackpotTotalContribAuto;
     const jackpotPaid = useMemo(
         () => jackpotWins.reduce((sum, item) => sum + Number(item.amount ?? 0), 0),
         [jackpotWins]
@@ -1289,12 +1269,11 @@ export default function JPBTPage({ players: seedPlayers }) {
                     </div>
                     <h3>Lịch sử rank</h3>
                     {historyEditSelect}
-                    <table className="data-table desktop-view">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
-                                <th>Date</th>
-                                <th>Rank</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
                             </tr>
                         </thead>
                         <tbody>
@@ -1302,32 +1281,24 @@ export default function JPBTPage({ players: seedPlayers }) {
                                 attendanceHistoryRows.map((row) => (
                                     <tr key={row.round}>
                                         <td>{row.round}</td>
-                                        <td>{row.date}</td>
-                                        <td>{formatRankNames(row)}</td>
+                                        {players.map((p) => (
+                                            <td key={p.id}>
+                                                {row.attendance[p.id]
+                                                    ? row.rank[p.id] === "NA"
+                                                        ? "N/A"
+                                                        : row.rank[p.id] ?? "N/A"
+                                                    : ""}
+                                            </td>
+                                        ))}
                                     </tr>
                                 ))
                             ) : (
                                 <tr>
-                                    <td colSpan={3}>Chưa có lịch sử.</td>
+                                    <td colSpan={players.length + 1}>Chưa có lịch sử.</td>
                                 </tr>
                             )}
                         </tbody>
                     </table>
-                    <div className="mobile-round-list">
-                        {attendanceHistoryRows.length > 0 ? (
-                            attendanceHistoryRows.map((row) => (
-                                <div className="mobile-round-card" key={row.round}>
-                                    <div className="mobile-round-header">
-                                        <strong>Lần chơi {row.round}</strong>
-                                        <span>{row.date || "Chưa có ngày"}</span>
-                                    </div>
-                                    <p>{formatRankNames(row)}</p>
-                                </div>
-                            ))
-                        ) : (
-                            <p>Chưa có lịch sử.</p>
-                        )}
-                    </div>
                 </div>
             )}
 
@@ -1520,11 +1491,10 @@ export default function JPBTPage({ players: seedPlayers }) {
                     </div>
                     <h3>Lịch sử bounty</h3>
                     {historyEditSelect}
-                    <table className="data-table desktop-view">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
-                                <th>Date</th>
                                 {players.map((p) => <th key={p.id}>{p.name}</th>)}
                                 <th>Tiền K/O</th>
                             </tr>
@@ -1534,7 +1504,6 @@ export default function JPBTPage({ players: seedPlayers }) {
                                 attendanceHistoryRows.map((row) => (
                                     <tr key={row.round}>
                                         <td>{row.round}</td>
-                                        <td>{row.date}</td>
                                         {players.map((p) => (
                                             <td key={p.id}>
                                                 {row.attendance[p.id] ? row.bounty[p.id] ?? "0" : ""}
@@ -1549,89 +1518,28 @@ export default function JPBTPage({ players: seedPlayers }) {
                                 ))
                             ) : (
                                 <tr>
-                                    <td colSpan={players.length + 3}>Chưa có lịch sử.</td>
+                                    <td colSpan={players.length + 2}>Chưa có lịch sử.</td>
                                 </tr>
                             )}
                         </tbody>
                     </table>
-                    <div className="mobile-round-list">
-                        {attendanceHistoryRows.length > 0 ? (
-                            attendanceHistoryRows.map((row) => (
-                                <div className="mobile-round-card" key={row.round}>
-                                    <div className="mobile-round-header">
-                                        <strong>Lần chơi {row.round}</strong>
-                                        <span>
-                                            Tiền K/O:{" "}
-                                            {summary.koMoneyByRound[row.round] === ""
-                                                ? "-"
-                                                : formatCurrency(summary.koMoneyByRound[row.round] ?? 0)}
-                                        </span>
-                                    </div>
-                                    <div className="mobile-player-list">
-                                        {players.map((p) => (
-                                            <div className="mobile-player-row" key={p.id}>
-                                                <span>{p.name}</span>
-                                                <strong>
-                                                    {row.attendance[p.id] ? row.bounty[p.id] ?? "0" : "-"}
-                                                </strong>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="mobile-round-card">Chưa có lịch sử.</div>
-                        )}
-                    </div>
                 </div>
             )}
 
             {subTab === "Jackpot" && (
                 <div className="card">
                     <h2>Jackpot</h2>
-                    <div className="editor-block">
-                        <h3>Jackpot tổng đã góp (sửa/xóa thủ công)</h3>
-                        <div className="form-grid form-grid-4">
-                            <input
-                                type="number"
-                                value={jackpotTotalInput}
-                                placeholder={String(jackpotTotalContribAuto)}
-                                onChange={(e) => setJackpotTotalInput(e.target.value)}
-                            />
-                        </div>
-                        <div className="row-actions">
-                            <button
-                                className="btn btn-primary"
-                                onClick={() =>
-                                    setSettings((prev) => ({
-                                        ...prev,
-                                        jackpotTotalOverride:
-                                            jackpotTotalInput.trim() === ""
-                                                ? null
-                                                : Number(jackpotTotalInput)
-                                    }))
-                                }
-                            >
-                                Lưu tổng góp
-                            </button>
-                            <button
-                                className="btn btn-danger"
-                                onClick={() => {
-                                    setSettings((prev) => ({ ...prev, jackpotTotalOverride: null }));
-                                    setJackpotTotalInput("");
-                                }}
-                            >
-                                Xóa chỉnh sửa
-                            </button>
-                        </div>
-                    </div>
-                    <div className="summary-grid">
-                        <div>
-                            Jackpot tổng đã góp: {formatCurrency(jackpotTotalContrib)}
-                            {settings.jackpotTotalOverride !== null ? " (manual)" : " (auto)"}
-                        </div>
+                    <div className="summary-grid jackpot-summary">
+                        <div>Jackpot tổng đã góp: {formatCurrency(jackpotTotalContrib)}</div>
                         <div>Jackpot đã trả: {formatCurrency(jackpotPaid)}</div>
-                        <div>Jackpot còn lại: {formatCurrency(jackpotRemain)}</div>
+                        <div className="jackpot-remain-stat">
+                            <span className="jackpot-remain-label">Jackpot còn lại</span>
+                            <span
+                                className={`jackpot-remain-value ${jackpotRemain < 0 ? "text-negative" : ""}`}
+                            >
+                                {formatCurrency(jackpotRemain)}
+                            </span>
+                        </div>
                     </div>
                     <h3>Danh sách ăn Jackpot</h3>
                     <div className="row-actions">

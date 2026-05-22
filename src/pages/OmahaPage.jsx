@@ -507,13 +507,6 @@ export default function OmahaPage({ players: seedPlayers }) {
         return names.length > 0 ? names.join(", ") : "-";
     };
 
-    const formatRankNames = (row) => {
-        const ranks = players
-            .filter((player) => row.attendance?.[player.id])
-            .map((player) => `${player.name}: ${row.rank?.[player.id] === "NA" ? "N/A" : row.rank?.[player.id] ?? "N/A"}`);
-        return ranks.length > 0 ? ranks.join(", ") : "-";
-    };
-
     const addRound = () => {
         const currentRow = rows.at(-1);
         if (currentRow && isBlankRow(currentRow, players)) {
@@ -1126,12 +1119,11 @@ export default function OmahaPage({ players: seedPlayers }) {
                     </div>
                     <h3>Lịch sử rank</h3>
                     {historyEditSelect}
-                    <table className="data-table desktop-view">
+                    <table className="data-table summary-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
-                                <th>Date</th>
-                                <th>Rank</th>
+                                {players.map((p) => <th key={p.id}>{p.name}</th>)}
                             </tr>
                         </thead>
                         <tbody>
@@ -1139,32 +1131,24 @@ export default function OmahaPage({ players: seedPlayers }) {
                                 attendanceHistoryRows.map((row) => (
                                     <tr key={row.round}>
                                         <td>{row.round}</td>
-                                        <td>{row.date}</td>
-                                        <td>{formatRankNames(row)}</td>
+                                        {players.map((p) => (
+                                            <td key={p.id}>
+                                                {row.attendance[p.id]
+                                                    ? row.rank[p.id] === "NA"
+                                                        ? "N/A"
+                                                        : row.rank[p.id] ?? "N/A"
+                                                    : ""}
+                                            </td>
+                                        ))}
                                     </tr>
                                 ))
                             ) : (
                                 <tr>
-                                    <td colSpan={3}>Chưa có lịch sử.</td>
+                                    <td colSpan={players.length + 1}>Chưa có lịch sử.</td>
                                 </tr>
                             )}
                         </tbody>
                     </table>
-                    <div className="mobile-round-list">
-                        {attendanceHistoryRows.length > 0 ? (
-                            attendanceHistoryRows.map((row) => (
-                                <div className="mobile-round-card" key={row.round}>
-                                    <div className="mobile-round-header">
-                                        <strong>Lần chơi {row.round}</strong>
-                                        <span>{row.date || "Chưa có ngày"}</span>
-                                    </div>
-                                    <p>{formatRankNames(row)}</p>
-                                </div>
-                            ))
-                        ) : (
-                            <p>Chưa có lịch sử.</p>
-                        )}
-                    </div>
                 </div>
             )}
 
