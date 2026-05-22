@@ -8,9 +8,6 @@ export default function CombinedSummaryPage({ players, refreshKey = 0 }) {
     return (
         <div className="card combined-summary-card">
             <h2>Tổng kết</h2>
-            <p className="combined-summary-note">
-                Net lấy từ tab Tổng kết của Omaha và JP + BT (dữ liệu đã lưu trên máy / cloud).
-            </p>
             <table className="data-table summary-table combined-net-table">
                 <thead>
                     <tr>
@@ -37,16 +34,6 @@ export default function CombinedSummaryPage({ players, refreshKey = 0 }) {
                     ))}
                 </tbody>
             </table>
-            <div className="summary-grid combined-summary-grid">
-                <div>Check Omaha: {formatCurrency(combined.omahaCheck)}</div>
-                <div>Check JP + BT: {formatCurrency(combined.jpbtCheck)}</div>
-                <div className="combined-total-net">
-                    <span>Tổng net tất cả</span>
-                    <strong className={combined.totalNet >= 0 ? "text-positive" : "text-negative"}>
-                        {formatCurrency(combined.totalNet)}
-                    </strong>
-                </div>
-            </div>
         </div>
     );
 }

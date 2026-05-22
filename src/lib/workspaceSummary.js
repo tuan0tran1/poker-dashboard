@@ -220,10 +220,5 @@ export function buildCombinedNetRows(masterPlayers, refreshKey = 0) {
         };
     });
 
-    return {
-        rows,
-        omahaCheck: omahaSummary.check,
-        jpbtCheck: jpbtSummary.check,
-        totalNet: rows.reduce((sum, row) => sum + row.totalNet, 0)
-    };
+    return { rows };
 }

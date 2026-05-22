@@ -394,37 +394,6 @@ input[type="checkbox"] {
   color: #ff8a84;
 }
 
-.combined-summary-note {
-  color: #aab4d2;
-  font-size: 14px;
-  margin: 0 0 14px;
-}
-
-.combined-summary-grid {
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
-}
-
-.combined-total-net {
-  align-items: center;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  justify-content: center;
-  text-align: center;
-}
-
-.combined-total-net span {
-  color: #d4bc6a;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.combined-total-net strong {
-  font-size: 1.35rem;
-}
-
 .combined-net-table th:last-child,
 .combined-net-table td:last-child {
   background: rgba(34, 48, 74, 0.55);
@@ -648,10 +617,6 @@ input[type="checkbox"] {
   }
 
   .summary-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .combined-summary-grid {
     grid-template-columns: 1fr;
   }
 
