@@ -22,6 +22,22 @@ function sortJackpotWinsNewestFirst(wins) {
     return [...wins].sort((a, b) => Number(b.id) - Number(a.id));
 }
 
+function jackpotRoundOptions(rows, currentRound) {
+    const options = rows.length > 0 ? rows.map((row) => row.round) : [1];
+    const numeric = Number(currentRound);
+    if (Number.isFinite(numeric) && !options.includes(numeric)) {
+        return [...options, numeric].sort((a, b) => a - b);
+    }
+    return options;
+}
+
+function getJackpotRoundValue(currentRound, rows) {
+    const options = jackpotRoundOptions(rows, currentRound);
+    const numeric = Number(currentRound);
+    if (options.includes(numeric)) return numeric;
+    return options[options.length - 1] ?? 1;
+}
+
 function getTodayDateInputValue() {
     const today = new Date();
     const year = today.getFullYear();
@@ -126,6 +142,38 @@ function rankOptions(count, row, playerId) {
     );
 }
 
+function bountyKoOptions(row, players) {
+    const attendanceCount = players.filter((player) => row.attendance?.[player.id]).length;
+    return ["", ...Array.from({ length: attendanceCount }, (_, index) => String(index + 1))];
+}
+
+function formatBountyKoDisplay(value) {
+    if (value === "" || value === null || value === undefined || value === "0" || value === 0) return "";
+    return String(value);
+}
+
+function getBountyKoValue(row, playerId, players) {
+    const raw = row.bounty?.[playerId];
+    if (raw === "" || raw === null || raw === undefined || raw === "0") return "";
+    const attendanceCount = players.filter((player) => row.attendance?.[player.id]).length;
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric) || numeric <= 0) return "";
+    if (attendanceCount === 0) return "";
+    return String(Math.min(numeric, attendanceCount));
+}
+
+function formatOptionalNumberInput(value) {
+    if (value === "" || value === null || value === undefined) return "";
+    if (Number(value) === 0) return "";
+    return value;
+}
+
+function parseOptionalNumberInput(value) {
+    if (value === "" || value === null || value === undefined) return "";
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : "";
+}
+
 function rankColorClass(rank) {
     const rankNumber = Number(String(rank).replace("Top ", ""));
     if (!Number.isFinite(rankNumber)) return "";
@@ -175,7 +223,7 @@ function isBlankRow(row, players) {
         players.every((player) => !row.attendance?.[player.id]) &&
         players.every((player) => !row.rebuys?.[player.id]) &&
         players.every((player) => (row.rank?.[player.id] ?? "NA") === "NA") &&
-        players.every((player) => !row.bounty?.[player.id]) &&
+        players.every((player) => !row.bounty?.[player.id] || row.bounty[player.id] === "0") &&
         players.every((player) => !row.jackpotContrib?.[player.id])
     );
 }
@@ -717,10 +765,11 @@ export default function JPBTPage({ players: seedPlayers }) {
     };
 
     const addJackpotWin = () => {
+        const defaultRound = rows.at(-1)?.round ?? 1;
         setJackpotWins((prev) => {
             const nextId = prev.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1;
             return sortJackpotWinsNewestFirst([
-                { id: nextId, round: 1, winnerId: players[0]?.id ?? "", type: "Tu Quy", amount: 0 },
+                { id: nextId, round: defaultRound, winnerId: "", type: "Tu Quy", amount: "" },
                 ...prev
             ]);
         });
@@ -1382,7 +1431,7 @@ export default function JPBTPage({ players: seedPlayers }) {
             {subTab === "Bounty" && (
                 <div className="card">
                     <h2>Bounty</h2>
-                    <table className="data-table desktop-view">
+                    <table className="data-table desktop-view bounty-table">
                         <thead>
                             <tr>
                                 <th>Lần chơi</th>
@@ -1396,12 +1445,9 @@ export default function JPBTPage({ players: seedPlayers }) {
                                     <td>{currentAttendanceRow.round}</td>
                                     {players.map((p) => (
                                         <td key={p.id}>
-                                            <input
-                                                type="number"
-                                                value={currentAttendanceRow.bounty[p.id] ?? ""}
-                                                placeholder="Số K/O"
-                                                min={0}
-                                                step={1}
+                                            <select
+                                                className="bounty-ko-select"
+                                                value={getBountyKoValue(currentAttendanceRow, p.id, players)}
                                                 disabled={!currentAttendanceRow.attendance[p.id]}
                                                 onChange={(e) =>
                                                     updateRow(currentAttendanceRow.round, (r) => ({
@@ -1409,7 +1455,13 @@ export default function JPBTPage({ players: seedPlayers }) {
                                                         bounty: { ...r.bounty, [p.id]: e.target.value }
                                                     }))
                                                 }
-                                            />
+                                            >
+                                                {bountyKoOptions(currentAttendanceRow, players).map((option) => (
+                                                    <option key={option || "empty"} value={option}>
+                                                        {option === "" ? "—" : option}
+                                                    </option>
+                                                ))}
+                                            </select>
                                         </td>
                                     ))}
                                     <td>
@@ -1437,12 +1489,8 @@ export default function JPBTPage({ players: seedPlayers }) {
                                     {players.map((p) => (
                                         <label className="mobile-player-row" key={p.id}>
                                             <span>{p.name}</span>
-                                            <input
-                                                type="number"
-                                                value={currentAttendanceRow.bounty[p.id] ?? ""}
-                                                placeholder="Số K/O"
-                                                min={0}
-                                                step={1}
+                                            <select
+                                                value={getBountyKoValue(currentAttendanceRow, p.id, players)}
                                                 disabled={!currentAttendanceRow.attendance[p.id]}
                                                 onChange={(e) =>
                                                     updateRow(currentAttendanceRow.round, (r) => ({
@@ -1450,7 +1498,13 @@ export default function JPBTPage({ players: seedPlayers }) {
                                                         bounty: { ...r.bounty, [p.id]: e.target.value }
                                                     }))
                                                 }
-                                            />
+                                            >
+                                                {bountyKoOptions(currentAttendanceRow, players).map((option) => (
+                                                    <option key={option || "empty"} value={option}>
+                                                        {option === "" ? "—" : option}
+                                                    </option>
+                                                ))}
+                                            </select>
                                         </label>
                                     ))}
                                 </div>
@@ -1474,7 +1528,9 @@ export default function JPBTPage({ players: seedPlayers }) {
                                         <td>{row.round}</td>
                                         {players.map((p) => (
                                             <td key={p.id}>
-                                                {row.attendance[p.id] ? row.bounty[p.id] ?? "0" : ""}
+                                                {row.attendance[p.id]
+                                                    ? formatBountyKoDisplay(row.bounty[p.id])
+                                                    : ""}
                                             </td>
                                         ))}
                                         <td>
@@ -1527,12 +1583,18 @@ export default function JPBTPage({ players: seedPlayers }) {
                             {jackpotWinsSorted.map((item) => (
                                 <tr key={item.id}>
                                     <td>
-                                        <input
-                                            type="number"
-                                            min={1}
-                                            value={item.round}
-                                            onChange={(e) => updateJackpotWin(item.id, { round: Number(e.target.value || 1) })}
-                                        />
+                                        <select
+                                            value={getJackpotRoundValue(item.round, rows)}
+                                            onChange={(e) =>
+                                                updateJackpotWin(item.id, { round: Number(e.target.value) })
+                                            }
+                                        >
+                                            {jackpotRoundOptions(rows, item.round).map((round) => (
+                                                <option key={round} value={round}>
+                                                    {round}
+                                                </option>
+                                            ))}
+                                        </select>
                                     </td>
                                     <td>
                                         <select
@@ -1562,8 +1624,13 @@ export default function JPBTPage({ players: seedPlayers }) {
                                     <td>
                                         <input
                                             type="number"
-                                            value={item.amount}
-                                            onChange={(e) => updateJackpotWin(item.id, { amount: Number(e.target.value || 0) })}
+                                            value={formatOptionalNumberInput(item.amount)}
+                                            placeholder="Tiền ăn"
+                                            onChange={(e) =>
+                                                updateJackpotWin(item.id, {
+                                                    amount: parseOptionalNumberInput(e.target.value)
+                                                })
+                                            }
                                         />
                                     </td>
                                     <td>

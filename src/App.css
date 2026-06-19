@@ -399,6 +399,50 @@ input[type="checkbox"] {
   background: rgba(34, 48, 74, 0.55);
 }
 
+.bounty-table {
+  min-width: max-content;
+}
+
+.bounty-table select,
+.bounty-ko-select {
+  box-sizing: border-box;
+  font-size: 13px;
+  max-width: 3.25rem;
+  min-width: 2.75rem;
+  padding: 4px 2px;
+  width: 3.25rem;
+}
+
+.bounty-table th,
+.bounty-table td {
+  padding: 8px 6px;
+  text-align: center;
+}
+
+.bounty-table th:first-child,
+.bounty-table td:first-child {
+  min-width: 3rem;
+  width: 3rem;
+}
+
+.bounty-table th:not(:first-child):not(:last-child),
+.bounty-table td:not(:first-child):not(:last-child) {
+  min-width: 3.25rem;
+  width: 3.25rem;
+}
+
+.bounty-table th:last-child,
+.bounty-table td:last-child {
+  font-size: 16px;
+  max-width: 6rem;
+  min-width: 6rem;
+  padding-left: 4px;
+  padding-right: 4px;
+  width: 6rem;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .jackpot-wins-table th:first-child,
 .jackpot-wins-table td:first-child {
   width: 4.15rem;
