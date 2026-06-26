@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../utils/finance";
+import {
+    applyRowBuyInSnapshots,
+    getRowPrizeBaseAmount,
+    sumPlayerBuyIn,
+    sumPlayerPrizePoolContribution,
+    withFrozenBuyIn
+} from "../utils/roundStakes";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
 const JPBT_STORAGE_KEY = "jpbt-workspace-v1";
@@ -262,7 +269,6 @@ export default function JPBTPage({ players: seedPlayers }) {
         try {
             const parsed = JSON.parse(raw);
             const players = Array.isArray(parsed.players) && parsed.players.length > 0 ? parsed.players : defaultPlayers;
-            const rows = Array.isArray(parsed.rows) ? normalizeRows(withPlayerKeys(parsed.rows, players), players) : defaultRows;
             const parsedRankPoints = parsed.settings?.rankPoints;
             const rankPointsCustomized = Boolean(parsed.settings?.rankPointsCustomized);
             const defaultRankPoints = createDefaultRankPoints(players.length);
@@ -275,17 +281,21 @@ export default function JPBTPage({ players: seedPlayers }) {
                 : Object.fromEntries(
                       players.map((_, idx) => [idx + 1, parsedRankPoints?.[idx + 1] ?? defaultRankPoints[idx + 1]])
                   );
+            const settings = {
+                ...(parsed.settings ?? defaultSettings),
+                rankPoints: nextRankPoints,
+                rankPointsCustomized,
+                blindLevels: normalizeBlindLevels(
+                    parsed.settings?.blindLevels ?? defaultSettings.blindLevels
+                )
+            };
+            const normalizedRows = Array.isArray(parsed.rows)
+                ? normalizeRows(withPlayerKeys(parsed.rows, players), players)
+                : defaultRows;
             return {
                 players,
-                rows,
-                settings: {
-                    ...(parsed.settings ?? defaultSettings),
-                    rankPoints: nextRankPoints,
-                    rankPointsCustomized,
-                    blindLevels: normalizeBlindLevels(
-                        parsed.settings?.blindLevels ?? defaultSettings.blindLevels
-                    )
-                },
+                rows: applyRowBuyInSnapshots(normalizedRows, settings, players),
+                settings,
                 notes: normalizeNotes(parsed.notes),
                 jackpotWins: sortJackpotWinsNewestFirst(
                     Array.isArray(parsed.jackpotWins) ? parsed.jackpotWins : []
@@ -351,7 +361,11 @@ export default function JPBTPage({ players: seedPlayers }) {
         return {
             players: nextPlayers,
             rows: Array.isArray(workspaceData.rows)
-                ? normalizeRows(withPlayerKeys(workspaceData.rows, nextPlayers), nextPlayers)
+                ? applyRowBuyInSnapshots(
+                    normalizeRows(withPlayerKeys(workspaceData.rows, nextPlayers), nextPlayers),
+                    nextSettings,
+                    nextPlayers
+                )
                 : createRows(nextPlayers),
             settings: nextSettings,
             notes: normalizeNotes(workspaceData.notes),
@@ -457,7 +471,13 @@ export default function JPBTPage({ players: seedPlayers }) {
     };
 
     const updateRow = (round, updater) => {
-        setRows((prev) => prev.map((row) => (row.round === round ? updater(row) : row)));
+        setRows((prev) =>
+            prev.map((row) => {
+                if (row.round !== round) return row;
+                const next = updater(row);
+                return withFrozenBuyIn(next, settings, players);
+            })
+        );
     };
 
     const selectAllAttendance = (round) => {
@@ -488,11 +508,18 @@ export default function JPBTPage({ players: seedPlayers }) {
         setSelectedHistoryRound("");
         setRows((prev) => [
             ...prev.map((row, index) =>
-                index === prev.length - 1 ? { ...row, date: row.date || getTodayDateInputValue() } : row
+                index === prev.length - 1
+                    ? withFrozenBuyIn(
+                        { ...row, date: row.date || getTodayDateInputValue() },
+                        settings,
+                        players
+                    )
+                    : row
             ),
             {
                 round: prev.length + 1,
                 date: getTodayDateInputValue(),
+                buyIn: Number(settings.buyIn || 0),
                 attendance: Object.fromEntries(players.map((player) => [player.id, false])),
                 rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
                 rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -599,7 +626,11 @@ export default function JPBTPage({ players: seedPlayers }) {
             setPlayers(nextPlayers);
             setRows(
                 Array.isArray(imported.rows)
-                    ? normalizeRows(withPlayerKeys(imported.rows, nextPlayers), nextPlayers)
+                    ? applyRowBuyInSnapshots(
+                        normalizeRows(withPlayerKeys(imported.rows, nextPlayers), nextPlayers),
+                        nextSettings,
+                        nextPlayers
+                    )
                     : createRows(nextPlayers)
             );
             setSettings(nextSettings);
@@ -670,13 +701,9 @@ export default function JPBTPage({ players: seedPlayers }) {
     };
 
     const profitByRound = useMemo(() => {
-        const baseAmount =
-            Number(settings.buyIn || 0) -
-            Number(settings.jackpot || 0) -
-            Number(settings.bounty || 0);
-
         return Object.fromEntries(
             rows.map((row) => {
+                const baseAmount = getRowPrizeBaseAmount(row, settings);
                 const attendeeCount = players.filter((player) => row.attendance?.[player.id]).length;
                 const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
                 const participantPool = attendeeCount * baseAmount;
@@ -712,7 +739,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                 return [row.round, byPlayer];
             })
         );
-    }, [players, rows, settings.buyIn, settings.jackpot, settings.bounty, settings.rankPoints]);
+    }, [players, rows, settings.jackpot, settings.bounty, settings.rankPoints]);
 
     const dataIssues = rows.flatMap((row) => {
         const attendees = players.filter((player) => row.attendance?.[player.id]);
@@ -784,10 +811,6 @@ export default function JPBTPage({ players: seedPlayers }) {
     };
 
     const summary = (() => {
-        const baseAmount =
-            Number(settings.buyIn || 0) -
-            Number(settings.jackpot || 0) -
-            Number(settings.bounty || 0);
         const rankCount = Object.fromEntries(players.map((player) => [player.id, Object.fromEntries(players.map((_, idx) => [idx + 1, 0]))]));
         const totalRank = Object.fromEntries(players.map((player) => [player.id, 0]));
         const totalRankRound = Object.fromEntries(players.map((player) => [player.id, 0]));
@@ -851,8 +874,8 @@ export default function JPBTPage({ players: seedPlayers }) {
                 return sum + (settings.rankPoints[rankNumber] ?? 0);
             }, 0);
             const entries = sessions + rebuys;
-            const buyIn = entries * Number(settings.buyIn || 0);
-            const prizePoolContribution = entries * baseAmount;
+            const buyIn = sumPlayerBuyIn(rows, pid, settings);
+            const prizePoolContribution = sumPlayerPrizePoolContribution(rows, pid, settings);
             return {
                 playerId: pid,
                 playerName: player.name,

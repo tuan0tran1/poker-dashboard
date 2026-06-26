@@ -1,3 +1,10 @@
+import {
+    getRowBuyIn,
+    getRowPrizeBaseAmount,
+    sumPlayerBuyIn,
+    sumPlayerPrizePoolContribution
+} from "../utils/roundStakes";
+
 export const OMAHA_STORAGE_KEY = "omaha-workspace-v1";
 export const JPBT_STORAGE_KEY = "jpbt-workspace-v1";
 
@@ -12,10 +19,9 @@ export function loadWorkspace(storageKey) {
 }
 
 function computeProfitByRoundOmaha(players, rows, settings) {
-    const baseAmount = Number(settings?.buyIn || 0);
-
     return Object.fromEntries(
         (rows ?? []).map((row) => {
+            const baseAmount = getRowBuyIn(row, settings);
             const attendeeCount = players.filter((player) => row.attendance?.[player.id]).length;
             const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
             const pool = (attendeeCount + rebuyCount) * baseAmount;
@@ -85,11 +91,9 @@ export function computeOmahaSummary(workspace) {
 }
 
 function computeProfitByRoundJpbt(players, rows, settings) {
-    const baseAmount =
-        Number(settings?.buyIn || 0) - Number(settings?.jackpot || 0) - Number(settings?.bounty || 0);
-
     return Object.fromEntries(
         (rows ?? []).map((row) => {
+            const baseAmount = getRowPrizeBaseAmount(row, settings);
             const attendeeCount = players.filter((player) => row.attendance?.[player.id]).length;
             const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
             const pool = attendeeCount * baseAmount + rebuyCount * baseAmount;
@@ -135,8 +139,6 @@ export function computeJpbtSummary(workspace) {
         return { players: [], check: 0 };
     }
 
-    const baseAmount =
-        Number(settings.buyIn || 0) - Number(settings.jackpot || 0) - Number(settings.bounty || 0);
     const profitByRound = computeProfitByRoundJpbt(players, rows, settings);
     const totalProfit = Object.fromEntries(players.map((player) => [player.id, 0]));
     const bountyTotal = Object.fromEntries(players.map((player) => [player.id, 0]));
@@ -180,12 +182,8 @@ export function computeJpbtSummary(workspace) {
 
     const withNet = players.map((player) => {
         const pid = player.id;
-        const sessions = rows.filter((row) => row.attendance?.[pid]).length;
-        const rebuys = rows.filter((row) => row.rebuys?.[pid]).length;
-        const entries = sessions + rebuys;
-        const buyIn = entries * Number(settings.buyIn || 0);
-        const prizePoolContribution = entries * baseAmount;
-        const prize = prizePoolContribution;
+        const buyIn = sumPlayerBuyIn(rows, pid, settings);
+        const prize = sumPlayerPrizePoolContribution(rows, pid, settings);
         const net = totalProfit[pid] + bountyTotal[pid] + jackpotTotal[pid] + prize - buyIn;
         return {
             playerId: pid,

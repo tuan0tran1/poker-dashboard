@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { applyRowBuyInSnapshots, getRowBuyIn, sumPlayerBuyIn, withFrozenBuyIn } from "../utils/roundStakes";
 import { formatCurrency } from "../utils/finance";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
@@ -20,10 +21,11 @@ function getTodayDateInputValue() {
     return `${year}-${month}-${day}`;
 }
 
-function createRows(players, count = DEFAULT_ROUNDS) {
+function createRows(players, count = DEFAULT_ROUNDS, buyIn = 200000) {
     return Array.from({ length: count }, (_, index) => ({
         round: index + 1,
         date: getTodayDateInputValue(),
+        buyIn,
         attendance: Object.fromEntries(players.map((player) => [player.id, false])),
         rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
         rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -152,8 +154,8 @@ function downloadJson(filename, data) {
 export default function OmahaPage({ players: seedPlayers }) {
     const [initialData] = useState(() => {
         const defaultPlayers = seedPlayers.map((p) => ({ id: p.id, name: p.name }));
-        const defaultRows = createRows(defaultPlayers);
         const defaultSettings = createDefaultSettings(defaultPlayers);
+        const defaultRows = createRows(defaultPlayers, DEFAULT_ROUNDS, defaultSettings.buyIn);
         const raw = localStorage.getItem(OMAHA_STORAGE_KEY);
         if (!raw) {
             return { players: defaultPlayers, rows: defaultRows, settings: defaultSettings, notes: defaultNotes() };
@@ -161,20 +163,27 @@ export default function OmahaPage({ players: seedPlayers }) {
         try {
             const parsed = JSON.parse(raw);
             const players = Array.isArray(parsed.players) && parsed.players.length > 0 ? parsed.players : defaultPlayers;
-            const rows = Array.isArray(parsed.rows) ? normalizeRows(withPlayerKeys(parsed.rows, players), players) : defaultRows;
-            const parsedRankPoints = parsed.settings?.rankPoints;
-            const defaultRankPoints = createDefaultSettings(players).rankPoints;
+            const settings = {
+                ...defaultSettings,
+                ...(parsed.settings ?? {}),
+                rankPoints: Object.fromEntries(
+                    players.map((_, idx) => [
+                        idx + 1,
+                        parsed.settings?.rankPoints?.[idx + 1] ?? defaultSettings.rankPoints[idx + 1]
+                    ])
+                ),
+                rankPointsCustomized: Boolean(parsed.settings?.rankPointsCustomized),
+                blindLevels: normalizeBlindLevels(
+                    parsed.settings?.blindLevels ?? defaultSettings.blindLevels
+                )
+            };
+            const rows = Array.isArray(parsed.rows)
+                ? applyRowBuyInSnapshots(normalizeRows(withPlayerKeys(parsed.rows, players), players), settings, players)
+                : createRows(players, DEFAULT_ROUNDS, settings.buyIn);
             return {
                 players,
                 rows,
-                settings: {
-                    ...defaultSettings,
-                    ...(parsed.settings ?? {}),
-                    rankPoints: Object.fromEntries(
-                        players.map((_, idx) => [idx + 1, parsedRankPoints?.[idx + 1] ?? defaultRankPoints[idx + 1]])
-                    ),
-                    rankPointsCustomized: Boolean(parsed.settings?.rankPointsCustomized)
-                },
+                settings,
                 notes: normalizeNotes(parsed.notes)
             };
         } catch {
@@ -223,23 +232,28 @@ export default function OmahaPage({ players: seedPlayers }) {
                 : players;
         const defaultSettings = createDefaultSettings(nextPlayers);
         const parsedRankPoints = workspaceData.settings?.rankPoints;
+        const nextSettings = {
+            ...defaultSettings,
+            ...(workspaceData.settings ?? {}),
+            rankPoints: Object.fromEntries(
+                nextPlayers.map((_, idx) => [
+                    idx + 1,
+                    parsedRankPoints?.[idx + 1] ?? defaultSettings.rankPoints[idx + 1]
+                ])
+            ),
+            rankPointsCustomized: Boolean(workspaceData.settings?.rankPointsCustomized),
+            blindLevels: normalizeBlindLevels(workspaceData.settings?.blindLevels ?? defaultSettings.blindLevels)
+        };
         return {
             players: nextPlayers,
             rows: Array.isArray(workspaceData.rows)
-                ? normalizeRows(withPlayerKeys(workspaceData.rows, nextPlayers), nextPlayers)
-                : createRows(nextPlayers),
-            settings: {
-                ...defaultSettings,
-                ...(workspaceData.settings ?? {}),
-                rankPoints: Object.fromEntries(
-                    nextPlayers.map((_, idx) => [
-                        idx + 1,
-                        parsedRankPoints?.[idx + 1] ?? defaultSettings.rankPoints[idx + 1]
-                    ])
-                ),
-                rankPointsCustomized: Boolean(workspaceData.settings?.rankPointsCustomized),
-                blindLevels: normalizeBlindLevels(workspaceData.settings?.blindLevels ?? defaultSettings.blindLevels)
-            },
+                ? applyRowBuyInSnapshots(
+                    normalizeRows(withPlayerKeys(workspaceData.rows, nextPlayers), nextPlayers),
+                    nextSettings,
+                    nextPlayers
+                )
+                : createRows(nextPlayers, DEFAULT_ROUNDS, nextSettings.buyIn),
+            settings: nextSettings,
             notes: normalizeNotes(workspaceData.notes)
         };
     };
@@ -302,10 +316,9 @@ export default function OmahaPage({ players: seedPlayers }) {
     }, []);
 
     const profitByRound = useMemo(() => {
-        const baseAmount = Number(settings.buyIn || 0);
-
         return Object.fromEntries(
             rows.map((row) => {
+                const baseAmount = getRowBuyIn(row, settings);
                 const attendeeCount = players.filter((player) => row.attendance?.[player.id]).length;
                 const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
                 const pool = (attendeeCount + rebuyCount) * baseAmount;
@@ -339,7 +352,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                 return [row.round, byPlayer];
             })
         );
-    }, [players, rows, settings.buyIn, settings.rankPoints]);
+    }, [players, rows, settings, settings.rankPoints]);
 
     const dataIssues = useMemo(() => {
         return rows.flatMap((row) => {
@@ -450,7 +463,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                 const rankNumber = Number(rank.replace("Top ", ""));
                 return sum + (settings.rankPoints[rankNumber] ?? 0);
             }, 0);
-            const buyIn = (sessions + rebuys) * Number(settings.buyIn || 0);
+            const buyIn = sumPlayerBuyIn(rows, pid, settings);
             return {
                 playerId: pid,
                 playerName: player.name,
@@ -475,7 +488,13 @@ export default function OmahaPage({ players: seedPlayers }) {
     }, [players, rows, settings, profitByRound]);
 
     const updateRow = (round, updater) => {
-        setRows((prev) => prev.map((row) => (row.round === round ? updater(row) : row)));
+        setRows((prev) =>
+            prev.map((row) => {
+                if (row.round !== round) return row;
+                const next = updater(row);
+                return withFrozenBuyIn(next, settings, players);
+            })
+        );
     };
 
     const selectAllAttendance = (round) => {
@@ -504,11 +523,18 @@ export default function OmahaPage({ players: seedPlayers }) {
         setSelectedHistoryRound("");
         setRows((prev) => [
             ...prev.map((row, index) =>
-                index === prev.length - 1 ? { ...row, date: row.date || getTodayDateInputValue() } : row
+                index === prev.length - 1
+                    ? withFrozenBuyIn(
+                        { ...row, date: row.date || getTodayDateInputValue() },
+                        settings,
+                        players
+                    )
+                    : row
             ),
             {
                 round: prev.length + 1,
                 date: getTodayDateInputValue(),
+                buyIn: Number(settings.buyIn || 0),
                 attendance: Object.fromEntries(players.map((player) => [player.id, false])),
                 rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
                 rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -607,8 +633,12 @@ export default function OmahaPage({ players: seedPlayers }) {
             setPlayers(nextPlayers);
             setRows(
                 Array.isArray(imported.rows)
-                    ? normalizeRows(withPlayerKeys(imported.rows, nextPlayers), nextPlayers)
-                    : createRows(nextPlayers)
+                    ? applyRowBuyInSnapshots(
+                        normalizeRows(withPlayerKeys(imported.rows, nextPlayers), nextPlayers),
+                        nextSettings,
+                        nextPlayers
+                    )
+                    : createRows(nextPlayers, DEFAULT_ROUNDS, nextSettings.buyIn)
             );
             setSettings(nextSettings);
             setNotes(normalizeNotes(imported.notes));
