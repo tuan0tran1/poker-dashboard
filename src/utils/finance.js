@@ -20,3 +20,14 @@ export function formatCurrency(amount) {
     if (!Number.isFinite(value)) return "0";
     return Math.round(value).toLocaleString("vi-VN");
 }
+
+export function formatRoundProfit(value) {
+    if (value === "" || value == null) {
+        return "";
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return "";
+    }
+    return formatCurrency(numeric);
+}

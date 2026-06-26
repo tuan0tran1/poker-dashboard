@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { applyRowStakesSnapshots, computeProfitByRound, createLockedRoundStakes, getRowBuyIn, sumPlayerBuyIn, withFrozenRowStakes } from "../utils/roundStakes";
-import { formatCurrency } from "../utils/finance";
+import { applyRowStakesSnapshots, computeProfitByRound, readPositiveBuyIn, sumPlayerBuyIn, withFrozenRowStakes } from "../utils/roundStakes";
+import { formatCurrency, formatRoundProfit } from "../utils/finance";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
 const OMAHA_STORAGE_KEY = "omaha-workspace-v1";
@@ -21,11 +21,10 @@ function getTodayDateInputValue() {
     return `${year}-${month}-${day}`;
 }
 
-function createRows(players, count = DEFAULT_ROUNDS, buyIn = 200000) {
+function createRows(players, count = DEFAULT_ROUNDS) {
     return Array.from({ length: count }, (_, index) => ({
         round: index + 1,
         date: getTodayDateInputValue(),
-        buyIn,
         attendance: Object.fromEntries(players.map((player) => [player.id, false])),
         rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
         rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -155,7 +154,7 @@ export default function OmahaPage({ players: seedPlayers }) {
     const [initialData] = useState(() => {
         const defaultPlayers = seedPlayers.map((p) => ({ id: p.id, name: p.name }));
         const defaultSettings = createDefaultSettings(defaultPlayers);
-        const defaultRows = createRows(defaultPlayers, DEFAULT_ROUNDS, defaultSettings.buyIn);
+        const defaultRows = createRows(defaultPlayers, DEFAULT_ROUNDS);
         const raw = localStorage.getItem(OMAHA_STORAGE_KEY);
         if (!raw) {
             return { players: defaultPlayers, rows: defaultRows, settings: defaultSettings, notes: defaultNotes() };
@@ -166,6 +165,7 @@ export default function OmahaPage({ players: seedPlayers }) {
             const settings = {
                 ...defaultSettings,
                 ...(parsed.settings ?? {}),
+                buyIn: readPositiveBuyIn(parsed.settings?.buyIn, defaultSettings.buyIn),
                 rankPoints: Object.fromEntries(
                     players.map((_, idx) => [
                         idx + 1,
@@ -179,7 +179,7 @@ export default function OmahaPage({ players: seedPlayers }) {
             };
             const rows = Array.isArray(parsed.rows)
                 ? applyRowStakesSnapshots(normalizeRows(withPlayerKeys(parsed.rows, players), players), settings, players)
-                : createRows(players, DEFAULT_ROUNDS, settings.buyIn);
+                : createRows(players, DEFAULT_ROUNDS);
             return {
                 players,
                 rows,
@@ -235,6 +235,7 @@ export default function OmahaPage({ players: seedPlayers }) {
         const nextSettings = {
             ...defaultSettings,
             ...(workspaceData.settings ?? {}),
+            buyIn: readPositiveBuyIn(workspaceData.settings?.buyIn, defaultSettings.buyIn),
             rankPoints: Object.fromEntries(
                 nextPlayers.map((_, idx) => [
                     idx + 1,
@@ -252,7 +253,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                     nextSettings,
                     nextPlayers
                 )
-                : createRows(nextPlayers, DEFAULT_ROUNDS, nextSettings.buyIn),
+                : createRows(nextPlayers, DEFAULT_ROUNDS),
             settings: nextSettings,
             notes: normalizeNotes(workspaceData.notes)
         };
@@ -500,7 +501,6 @@ export default function OmahaPage({ players: seedPlayers }) {
             {
                 round: prev.length + 1,
                 date: getTodayDateInputValue(),
-                ...createLockedRoundStakes(settings),
                 attendance: Object.fromEntries(players.map((player) => [player.id, false])),
                 rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
                 rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -586,6 +586,7 @@ export default function OmahaPage({ players: seedPlayers }) {
             const nextSettings = {
                 ...defaultSettings,
                 ...(imported.settings ?? {}),
+                buyIn: readPositiveBuyIn(imported.settings?.buyIn, defaultSettings.buyIn),
                 rankPoints: Object.fromEntries(
                     nextPlayers.map((_, idx) => [
                         idx + 1,
@@ -604,7 +605,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                         nextSettings,
                         nextPlayers
                     )
-                    : createRows(nextPlayers, DEFAULT_ROUNDS, nextSettings.buyIn)
+                    : createRows(nextPlayers, DEFAULT_ROUNDS)
             );
             setSettings(nextSettings);
             setNotes(normalizeNotes(imported.notes));
@@ -1122,7 +1123,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                                     {players.map((p) => (
                                         <td key={p.id}>
                                             {currentAttendanceRow.attendance[p.id]
-                                                ? formatCurrency(Number(profitByRound[currentAttendanceRow.round]?.[p.id] ?? 0))
+                                                ? formatRoundProfit(profitByRound[currentAttendanceRow.round]?.[p.id])
                                                 : ""}
                                         </td>
                                     ))}
@@ -1147,7 +1148,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                                         {players.map((p) => (
                                             <td key={p.id}>
                                                 {row.attendance[p.id]
-                                                    ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
+                                                    ? formatRoundProfit(profitByRound[row.round]?.[p.id])
                                                     : ""}
                                             </td>
                                         ))}

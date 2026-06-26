@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatCurrency } from "../utils/finance";
+import { formatCurrency, formatRoundProfit } from "../utils/finance";
 import {
     applyRowStakesSnapshots,
     computeProfitByRound,
-    createLockedRoundStakes,
     getRowKoMoney,
+    readNonNegativeStake,
+    readPositiveBuyIn,
     sumJackpotContributions,
     sumPlayerBuyIn,
     sumPlayerPrizePoolContribution,
     withFrozenRowStakes
 } from "../utils/roundStakes";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
+import {
+    applyStakeSettingsDraft,
+    createStakeSettingsDraft,
+    hasPendingStakeSettingsDraft,
+    readStakeDraftNumber
+} from "../utils/stakeSettingsDraft";
 
 const JPBT_STORAGE_KEY = "jpbt-workspace-v1";
 const JPBT_SUBTAB_KEY = "jpbt-subtab-v1";
@@ -287,6 +294,9 @@ export default function JPBTPage({ players: seedPlayers }) {
             const settings = {
                 ...defaultSettings,
                 ...(parsed.settings ?? {}),
+                buyIn: readPositiveBuyIn(parsed.settings?.buyIn, defaultSettings.buyIn),
+                jackpot: readNonNegativeStake(parsed.settings?.jackpot, defaultSettings.jackpot),
+                bounty: readNonNegativeStake(parsed.settings?.bounty, defaultSettings.bounty),
                 rankPoints: nextRankPoints,
                 rankPointsCustomized,
                 blindLevels: normalizeBlindLevels(
@@ -317,6 +327,7 @@ export default function JPBTPage({ players: seedPlayers }) {
     const [players, setPlayers] = useState(initialData.players);
     const [rows, setRows] = useState(initialData.rows);
     const [settings, setSettings] = useState(initialData.settings);
+    const [stakeDraft, setStakeDraft] = useState(() => createStakeSettingsDraft(initialData.settings));
     const [notes, setNotes] = useState(initialData.notes);
     const [jackpotWins, setJackpotWins] = useState(initialData.jackpotWins);
     const [newPlayerName, setNewPlayerName] = useState("");
@@ -352,6 +363,9 @@ export default function JPBTPage({ players: seedPlayers }) {
         const nextSettings = {
             ...defaultSettings,
             ...(workspaceData.settings ?? {}),
+            buyIn: readPositiveBuyIn(workspaceData.settings?.buyIn, defaultSettings.buyIn),
+            jackpot: readNonNegativeStake(workspaceData.settings?.jackpot, defaultSettings.jackpot),
+            bounty: readNonNegativeStake(workspaceData.settings?.bounty, defaultSettings.bounty),
             rankPoints: Object.fromEntries(
                 nextPlayers.map((_, idx) => [
                     idx + 1,
@@ -384,6 +398,7 @@ export default function JPBTPage({ players: seedPlayers }) {
         setPlayers(nextWorkspace.players);
         setRows(nextWorkspace.rows);
         setSettings(nextWorkspace.settings);
+        setStakeDraft(createStakeSettingsDraft(nextWorkspace.settings));
         setNotes(nextWorkspace.notes);
         setJackpotWins(nextWorkspace.jackpotWins);
     };
@@ -523,7 +538,6 @@ export default function JPBTPage({ players: seedPlayers }) {
             {
                 round: prev.length + 1,
                 date: getTodayDateInputValue(),
-                ...createLockedRoundStakes(settings),
                 attendance: Object.fromEntries(players.map((player) => [player.id, false])),
                 rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
                 rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -617,6 +631,9 @@ export default function JPBTPage({ players: seedPlayers }) {
             const nextSettings = {
                 ...defaultSettings,
                 ...(imported.settings ?? {}),
+                buyIn: readPositiveBuyIn(imported.settings?.buyIn, defaultSettings.buyIn),
+                jackpot: readNonNegativeStake(imported.settings?.jackpot, defaultSettings.jackpot),
+                bounty: readNonNegativeStake(imported.settings?.bounty, defaultSettings.bounty),
                 rankPoints: Object.fromEntries(
                     nextPlayers.map((_, idx) => [
                         idx + 1,
@@ -638,6 +655,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                     : createRows(nextPlayers)
             );
             setSettings(nextSettings);
+            setStakeDraft(createStakeSettingsDraft(nextSettings));
             setNotes(normalizeNotes(imported.notes));
             setJackpotWins(
                 sortJackpotWinsNewestFirst(Array.isArray(imported.jackpotWins) ? imported.jackpotWins : [])
@@ -752,6 +770,15 @@ export default function JPBTPage({ players: seedPlayers }) {
         return issues;
     });
 
+    const confirmStakeSettings = () => {
+        const nextSettings = applyStakeSettingsDraft(settings, stakeDraft);
+        setSettings(nextSettings);
+        setStakeDraft(createStakeSettingsDraft(nextSettings));
+        showToast("Đã cập nhật buy-in, jackpot và bounty mặc định.");
+    };
+
+    const stakeSettingsPending = hasPendingStakeSettingsDraft(settings, stakeDraft);
+
     const deleteBlindLevel = (id) => {
         setSettings((prev) => {
             if (prev.blindLevels.length <= 1) return prev;
@@ -806,7 +833,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                 if (!Number.isNaN(p)) totalProfit[pid] += p;
                 const koCount = Number(row.bounty?.[pid] ?? 0);
                 if (!Number.isNaN(koCount) && row.attendance?.[pid]) {
-                    bountyTotal[pid] += koCount * Number(koMoneyByRound[row.round] || 0);
+                    bountyTotal[pid] += koCount * (koMoneyByRound[row.round] ?? 0);
                 }
                 const j = Number(row.jackpotContrib?.[pid] ?? 0);
                 if (!Number.isNaN(j)) jackpotTotal[pid] += j;
@@ -1308,7 +1335,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                                     {players.map((p) => (
                                         <td key={p.id}>
                                             {currentAttendanceRow.attendance[p.id]
-                                                ? formatCurrency(Number(profitByRound[currentAttendanceRow.round]?.[p.id] ?? 0))
+                                                ? formatRoundProfit(profitByRound[currentAttendanceRow.round]?.[p.id])
                                                 : ""}
                                         </td>
                                     ))}
@@ -1333,7 +1360,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                                         {players.map((p) => (
                                             <td key={p.id}>
                                                 {row.attendance[p.id]
-                                                    ? formatCurrency(Number(profitByRound[row.round]?.[p.id] ?? 0))
+                                                    ? formatRoundProfit(profitByRound[row.round]?.[p.id])
                                                     : ""}
                                             </td>
                                         ))}
@@ -1768,26 +1795,55 @@ export default function JPBTPage({ players: seedPlayers }) {
                             Buy-in
                             <input
                                 type="number"
-                                value={settings.buyIn}
-                                onChange={(e) => setSettings((prev) => ({ ...prev, buyIn: Number(e.target.value || 0) }))}
+                                value={stakeDraft.buyIn}
+                                onChange={(e) =>
+                                    setStakeDraft((prev) => ({
+                                        ...prev,
+                                        buyIn: readStakeDraftNumber(e.target.value)
+                                    }))
+                                }
                             />
                         </label>
                         <label>
                             Jackpot mặc định
                             <input
                                 type="number"
-                                value={settings.jackpot}
-                                onChange={(e) => setSettings((prev) => ({ ...prev, jackpot: Number(e.target.value || 0) }))}
+                                value={stakeDraft.jackpot}
+                                onChange={(e) =>
+                                    setStakeDraft((prev) => ({
+                                        ...prev,
+                                        jackpot: readStakeDraftNumber(e.target.value)
+                                    }))
+                                }
                             />
                         </label>
                         <label>
                             Bounty mặc định
                             <input
                                 type="number"
-                                value={settings.bounty}
-                                onChange={(e) => setSettings((prev) => ({ ...prev, bounty: Number(e.target.value || 0) }))}
+                                value={stakeDraft.bounty}
+                                onChange={(e) =>
+                                    setStakeDraft((prev) => ({
+                                        ...prev,
+                                        bounty: readStakeDraftNumber(e.target.value)
+                                    }))
+                                }
                             />
                         </label>
+                    </div>
+                    <div className="row-actions">
+                        <button
+                            className="btn btn-primary"
+                            onClick={confirmStakeSettings}
+                            disabled={!stakeSettingsPending}
+                        >
+                            Xác nhận
+                        </button>
+                        {stakeSettingsPending && (
+                            <span className="settings-pending-note">
+                                Thay đổi chưa áp dụng — bấm Xác nhận để dùng giá trị mới.
+                            </span>
+                        )}
                     </div>
                     <h3>Scoring Guide</h3>
                     <table className="data-table">
