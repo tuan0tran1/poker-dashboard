@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { applyRowBuyInSnapshots, getRowBuyIn, sumPlayerBuyIn, withFrozenBuyIn } from "../utils/roundStakes";
+import { applyRowStakesSnapshots, getRowBuyIn, sumPlayerBuyIn, withFrozenRowStakes } from "../utils/roundStakes";
 import { formatCurrency } from "../utils/finance";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
@@ -178,7 +178,7 @@ export default function OmahaPage({ players: seedPlayers }) {
                 )
             };
             const rows = Array.isArray(parsed.rows)
-                ? applyRowBuyInSnapshots(normalizeRows(withPlayerKeys(parsed.rows, players), players), settings, players)
+                ? applyRowStakesSnapshots(normalizeRows(withPlayerKeys(parsed.rows, players), players), settings, players)
                 : createRows(players, DEFAULT_ROUNDS, settings.buyIn);
             return {
                 players,
@@ -247,7 +247,7 @@ export default function OmahaPage({ players: seedPlayers }) {
         return {
             players: nextPlayers,
             rows: Array.isArray(workspaceData.rows)
-                ? applyRowBuyInSnapshots(
+                ? applyRowStakesSnapshots(
                     normalizeRows(withPlayerKeys(workspaceData.rows, nextPlayers), nextPlayers),
                     nextSettings,
                     nextPlayers
@@ -492,7 +492,7 @@ export default function OmahaPage({ players: seedPlayers }) {
             prev.map((row) => {
                 if (row.round !== round) return row;
                 const next = updater(row);
-                return withFrozenBuyIn(next, settings, players);
+                return withFrozenRowStakes(next, settings, players);
             })
         );
     };
@@ -524,7 +524,7 @@ export default function OmahaPage({ players: seedPlayers }) {
         setRows((prev) => [
             ...prev.map((row, index) =>
                 index === prev.length - 1
-                    ? withFrozenBuyIn(
+                    ? withFrozenRowStakes(
                         { ...row, date: row.date || getTodayDateInputValue() },
                         settings,
                         players
@@ -633,7 +633,7 @@ export default function OmahaPage({ players: seedPlayers }) {
             setPlayers(nextPlayers);
             setRows(
                 Array.isArray(imported.rows)
-                    ? applyRowBuyInSnapshots(
+                    ? applyRowStakesSnapshots(
                         normalizeRows(withPlayerKeys(imported.rows, nextPlayers), nextPlayers),
                         nextSettings,
                         nextPlayers

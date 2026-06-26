@@ -1,5 +1,21 @@
+function rowHasNumericSnapshot(row, key) {
+    return row?.[key] != null && row?.[key] !== "" && Number.isFinite(Number(row[key]));
+}
+
 export function rowHasBuyInSnapshot(row) {
-    return row?.buyIn != null && row?.buyIn !== "" && Number.isFinite(Number(row.buyIn));
+    return rowHasNumericSnapshot(row, "buyIn");
+}
+
+export function rowHasJackpotFeeSnapshot(row) {
+    return rowHasNumericSnapshot(row, "jackpotFee");
+}
+
+export function rowHasBountyFeeSnapshot(row) {
+    return rowHasNumericSnapshot(row, "bountyFee");
+}
+
+export function rowHasStakesSnapshot(row) {
+    return rowHasBuyInSnapshot(row) && rowHasJackpotFeeSnapshot(row) && rowHasBountyFeeSnapshot(row);
 }
 
 export function rowHasGameplayData(row, players) {
@@ -13,45 +29,64 @@ export function getRowBuyIn(row, settings) {
     return Number(settings?.buyIn || 0);
 }
 
-export function freezeRowBuyIn(row, settings) {
-    if (rowHasBuyInSnapshot(row)) {
-        return row;
+export function getRowJackpotFee(row, settings) {
+    if (rowHasJackpotFeeSnapshot(row)) {
+        return Number(row.jackpotFee);
     }
-    return {
-        ...row,
-        buyIn: Number(settings?.buyIn || 0)
-    };
+    return Number(settings?.jackpot || 0);
 }
 
-export function withFrozenBuyIn(row, settings, players) {
+export function getRowBountyFee(row, settings) {
+    if (rowHasBountyFeeSnapshot(row)) {
+        return Number(row.bountyFee);
+    }
+    return Number(settings?.bounty || 0);
+}
+
+export function freezeRowStakes(row, settings) {
+    const next = { ...row };
+    if (!rowHasBuyInSnapshot(row)) {
+        next.buyIn = Number(settings?.buyIn || 0);
+    }
+    if (!rowHasJackpotFeeSnapshot(row)) {
+        next.jackpotFee = Number(settings?.jackpot || 0);
+    }
+    if (!rowHasBountyFeeSnapshot(row)) {
+        next.bountyFee = Number(settings?.bounty || 0);
+    }
+    return next;
+}
+
+export function withFrozenRowStakes(row, settings, players) {
     if (!rowHasGameplayData(row, players)) {
         return row;
     }
-    return freezeRowBuyIn(row, settings);
+    return freezeRowStakes(row, settings);
 }
 
-export function snapshotRowBuyIn(row, settings) {
-    return freezeRowBuyIn(row, settings);
-}
-
-export function applyRowBuyInSnapshots(rows, settings, players) {
+export function applyRowStakesSnapshots(rows, settings, players) {
     return rows.map((row) => {
-        if (rowHasBuyInSnapshot(row)) {
-            return row;
-        }
         if (rowHasGameplayData(row, players)) {
-            return freezeRowBuyIn(row, settings);
+            return freezeRowStakes(row, settings);
         }
         return row;
     });
 }
 
 export function getRowPrizeBaseAmount(row, settings) {
-    return (
-        getRowBuyIn(row, settings) -
-        Number(settings?.jackpot || 0) -
-        Number(settings?.bounty || 0)
-    );
+    return getRowBuyIn(row, settings) - getRowJackpotFee(row, settings) - getRowBountyFee(row, settings);
+}
+
+export function getRowKoMoney(row, settings, players) {
+    if (!row.date) {
+        return "";
+    }
+    const attendanceCount = players.filter((player) => row.attendance?.[player.id]).length;
+    if (attendanceCount <= 1) {
+        return 0;
+    }
+    const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
+    return ((attendanceCount + rebuyCount) / (attendanceCount - 1)) * getRowBountyFee(row, settings);
 }
 
 export function sumPlayerBuyIn(rows, playerId, settings) {
@@ -69,3 +104,19 @@ export function sumPlayerPrizePoolContribution(rows, playerId, settings) {
         return sum + baseAmount + (row.rebuys?.[playerId] ? baseAmount : 0);
     }, 0);
 }
+
+export function sumJackpotContributions(rows, players, settings) {
+    return rows.reduce((sum, row) => {
+        const jackpotFee = getRowJackpotFee(row, settings);
+        const entries =
+            players.filter((player) => row.attendance?.[player.id]).length +
+            players.filter((player) => row.rebuys?.[player.id]).length;
+        return sum + entries * jackpotFee;
+    }, 0);
+}
+
+// Backward-compatible aliases
+export const freezeRowBuyIn = freezeRowStakes;
+export const withFrozenBuyIn = withFrozenRowStakes;
+export const applyRowBuyInSnapshots = applyRowStakesSnapshots;
+export const snapshotRowBuyIn = freezeRowStakes;

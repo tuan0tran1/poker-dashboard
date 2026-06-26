@@ -1,6 +1,8 @@
 import {
     getRowBuyIn,
+    getRowKoMoney,
     getRowPrizeBaseAmount,
+    sumJackpotContributions,
     sumPlayerBuyIn,
     sumPlayerPrizePoolContribution
 } from "../utils/roundStakes";
@@ -145,18 +147,7 @@ export function computeJpbtSummary(workspace) {
     const jackpotTotal = Object.fromEntries(players.map((player) => [player.id, 0]));
 
     const koMoneyByRound = Object.fromEntries(
-        rows.map((row) => {
-            if (!row.date) {
-                return [row.round, ""];
-            }
-            const attendanceCount = players.filter((player) => row.attendance?.[player.id]).length;
-            const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
-            const koMoney =
-                attendanceCount > 1
-                    ? ((attendanceCount + rebuyCount) / (attendanceCount - 1)) * Number(settings.bounty || 0)
-                    : 0;
-            return [row.round, koMoney];
-        })
+        rows.map((row) => [row.round, getRowKoMoney(row, settings, players)])
     );
 
     rows.forEach((row) => {
@@ -166,7 +157,7 @@ export function computeJpbtSummary(workspace) {
             if (!Number.isNaN(p)) totalProfit[pid] += p;
             const koCount = Number(row.bounty?.[pid] ?? 0);
             if (!Number.isNaN(koCount) && row.attendance?.[pid]) {
-                bountyTotal[pid] += koCount * (koMoneyByRound[row.round] ?? 0);
+                bountyTotal[pid] += koCount * Number(koMoneyByRound[row.round] || 0);
             }
             const j = Number(row.jackpotContrib?.[pid] ?? 0);
             if (!Number.isNaN(j)) jackpotTotal[pid] += j;

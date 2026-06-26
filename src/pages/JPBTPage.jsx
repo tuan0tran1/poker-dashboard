@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "../utils/finance";
 import {
-    applyRowBuyInSnapshots,
+    applyRowStakesSnapshots,
+    getRowKoMoney,
     getRowPrizeBaseAmount,
+    sumJackpotContributions,
     sumPlayerBuyIn,
     sumPlayerPrizePoolContribution,
-    withFrozenBuyIn
+    withFrozenRowStakes
 } from "../utils/roundStakes";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
@@ -294,7 +296,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                 : defaultRows;
             return {
                 players,
-                rows: applyRowBuyInSnapshots(normalizedRows, settings, players),
+                rows: applyRowStakesSnapshots(normalizedRows, settings, players),
                 settings,
                 notes: normalizeNotes(parsed.notes),
                 jackpotWins: sortJackpotWinsNewestFirst(
@@ -361,7 +363,7 @@ export default function JPBTPage({ players: seedPlayers }) {
         return {
             players: nextPlayers,
             rows: Array.isArray(workspaceData.rows)
-                ? applyRowBuyInSnapshots(
+                ? applyRowStakesSnapshots(
                     normalizeRows(withPlayerKeys(workspaceData.rows, nextPlayers), nextPlayers),
                     nextSettings,
                     nextPlayers
@@ -475,7 +477,7 @@ export default function JPBTPage({ players: seedPlayers }) {
             prev.map((row) => {
                 if (row.round !== round) return row;
                 const next = updater(row);
-                return withFrozenBuyIn(next, settings, players);
+                return withFrozenRowStakes(next, settings, players);
             })
         );
     };
@@ -509,7 +511,7 @@ export default function JPBTPage({ players: seedPlayers }) {
         setRows((prev) => [
             ...prev.map((row, index) =>
                 index === prev.length - 1
-                    ? withFrozenBuyIn(
+                    ? withFrozenRowStakes(
                         { ...row, date: row.date || getTodayDateInputValue() },
                         settings,
                         players
@@ -520,6 +522,8 @@ export default function JPBTPage({ players: seedPlayers }) {
                 round: prev.length + 1,
                 date: getTodayDateInputValue(),
                 buyIn: Number(settings.buyIn || 0),
+                jackpotFee: Number(settings.jackpot || 0),
+                bountyFee: Number(settings.bounty || 0),
                 attendance: Object.fromEntries(players.map((player) => [player.id, false])),
                 rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
                 rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -626,7 +630,7 @@ export default function JPBTPage({ players: seedPlayers }) {
             setPlayers(nextPlayers);
             setRows(
                 Array.isArray(imported.rows)
-                    ? applyRowBuyInSnapshots(
+                    ? applyRowStakesSnapshots(
                         normalizeRows(withPlayerKeys(imported.rows, nextPlayers), nextPlayers),
                         nextSettings,
                         nextPlayers
@@ -739,7 +743,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                 return [row.round, byPlayer];
             })
         );
-    }, [players, rows, settings.jackpot, settings.bounty, settings.rankPoints]);
+    }, [players, rows, settings.rankPoints]);
 
     const dataIssues = rows.flatMap((row) => {
         const attendees = players.filter((player) => row.attendance?.[player.id]);
@@ -819,18 +823,7 @@ export default function JPBTPage({ players: seedPlayers }) {
         const jackpotTotal = Object.fromEntries(players.map((player) => [player.id, 0]));
 
         const koMoneyByRound = Object.fromEntries(
-            rows.map((row) => {
-                if (!row.date) {
-                    return [row.round, ""];
-                }
-                const attendanceCount = players.filter((player) => row.attendance?.[player.id]).length;
-                const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
-                const koMoney =
-                    attendanceCount > 1
-                        ? ((attendanceCount + rebuyCount) / (attendanceCount - 1)) * Number(settings.bounty || 0)
-                        : 0;
-                return [row.round, koMoney];
-            })
+            rows.map((row) => [row.round, getRowKoMoney(row, settings, players)])
         );
 
         rows.forEach((row) => {
@@ -849,7 +842,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                 if (!Number.isNaN(p)) totalProfit[pid] += p;
                 const koCount = Number(row.bounty?.[pid] ?? 0);
                 if (!Number.isNaN(koCount) && row.attendance?.[pid]) {
-                    bountyTotal[pid] += koCount * (koMoneyByRound[row.round] ?? 0);
+                    bountyTotal[pid] += koCount * Number(koMoneyByRound[row.round] || 0);
                 }
                 const j = Number(row.jackpotContrib?.[pid] ?? 0);
                 if (!Number.isNaN(j)) jackpotTotal[pid] += j;
@@ -912,16 +905,8 @@ export default function JPBTPage({ players: seedPlayers }) {
     })();
 
     const jackpotTotalContribAuto = useMemo(
-        () =>
-            rows.reduce(
-                (sum, row) =>
-                    sum +
-                    (players.filter((player) => row.attendance?.[player.id]).length +
-                        players.filter((player) => row.rebuys?.[player.id]).length) *
-                        Number(settings.jackpot || 0),
-                0
-            ),
-        [rows, players, settings.jackpot]
+        () => sumJackpotContributions(rows, players, settings),
+        [rows, players, settings]
     );
     const jackpotTotalContrib = jackpotTotalContribAuto;
     const jackpotPaid = useMemo(
