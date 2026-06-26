@@ -284,7 +284,8 @@ export default function JPBTPage({ players: seedPlayers }) {
                       players.map((_, idx) => [idx + 1, parsedRankPoints?.[idx + 1] ?? defaultRankPoints[idx + 1]])
                   );
             const settings = {
-                ...(parsed.settings ?? defaultSettings),
+                ...defaultSettings,
+                ...(parsed.settings ?? {}),
                 rankPoints: nextRankPoints,
                 rankPointsCustomized,
                 blindLevels: normalizeBlindLevels(
@@ -521,9 +522,9 @@ export default function JPBTPage({ players: seedPlayers }) {
             {
                 round: prev.length + 1,
                 date: getTodayDateInputValue(),
-                buyIn: Number(settings.buyIn || 0),
-                jackpotFee: Number(settings.jackpot || 0),
-                bountyFee: Number(settings.bounty || 0),
+                buyIn: Number(settings.buyIn ?? createDefaultSettings(players).buyIn),
+                jackpotFee: Number(settings.jackpot ?? createDefaultSettings(players).jackpot),
+                bountyFee: Number(settings.bounty ?? createDefaultSettings(players).bounty),
                 attendance: Object.fromEntries(players.map((player) => [player.id, false])),
                 rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
                 rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
@@ -743,7 +744,7 @@ export default function JPBTPage({ players: seedPlayers }) {
                 return [row.round, byPlayer];
             })
         );
-    }, [players, rows, settings.rankPoints]);
+    }, [players, rows, settings.buyIn, settings.jackpot, settings.bounty, settings.rankPoints]);
 
     const dataIssues = rows.flatMap((row) => {
         const attendees = players.filter((player) => row.attendance?.[player.id]);

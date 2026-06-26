@@ -1,5 +1,10 @@
 function rowHasNumericSnapshot(row, key) {
-    return row?.[key] != null && row?.[key] !== "" && Number.isFinite(Number(row[key]));
+    if (row?.[key] == null || row?.[key] === "") {
+        return false;
+    }
+    const numeric = Number(row[key]);
+    // 0 is treated as unset so bad/legacy rows still fall back to settings.
+    return Number.isFinite(numeric) && numeric !== 0;
 }
 
 export function rowHasBuyInSnapshot(row) {
