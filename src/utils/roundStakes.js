@@ -1,85 +1,133 @@
-function rowHasNumericSnapshot(row, key) {
-    if (row?.[key] == null || row?.[key] === "") {
-        return false;
+export function getDefaultStakes(settings) {
+    return {
+        buyIn: Number(settings?.buyIn || 0),
+        jackpotFee: Number(settings?.jackpot || 0),
+        bountyFee: Number(settings?.bounty || 0)
+    };
+}
+
+function readStakeValue(raw, fallback) {
+    if (raw == null || raw === "") {
+        return fallback;
     }
-    const numeric = Number(row[key]);
-    // 0 is treated as unset so bad/legacy rows still fall back to settings.
-    return Number.isFinite(numeric) && numeric !== 0;
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-export function rowHasBuyInSnapshot(row) {
-    return rowHasNumericSnapshot(row, "buyIn");
+function repairBuyIn(buyIn, fallback) {
+    if (buyIn <= 0 && fallback > 0) {
+        return fallback;
+    }
+    return buyIn;
 }
 
-export function rowHasJackpotFeeSnapshot(row) {
-    return rowHasNumericSnapshot(row, "jackpotFee");
+function resolveLockedStakes(row, defaults) {
+    if (Number(row.buyIn) <= 0 && defaults.buyIn > 0) {
+        return defaults;
+    }
+    return {
+        buyIn: repairBuyIn(readStakeValue(row.buyIn, defaults.buyIn), defaults.buyIn),
+        jackpotFee: readStakeValue(row.jackpotFee, defaults.jackpotFee),
+        bountyFee: readStakeValue(row.bountyFee, defaults.bountyFee)
+    };
 }
 
-export function rowHasBountyFeeSnapshot(row) {
-    return rowHasNumericSnapshot(row, "bountyFee");
+export function getRowStakes(row, settings) {
+    const defaults = getDefaultStakes(settings);
+    if (!row?.stakesLocked) {
+        return defaults;
+    }
+    return resolveLockedStakes(row, defaults);
 }
 
-export function rowHasStakesSnapshot(row) {
-    return rowHasBuyInSnapshot(row) && rowHasJackpotFeeSnapshot(row) && rowHasBountyFeeSnapshot(row);
+export function createLockedRoundStakes(settings) {
+    const stakes = getDefaultStakes(settings);
+    return {
+        stakesLocked: true,
+        buyIn: stakes.buyIn,
+        jackpotFee: stakes.jackpotFee,
+        bountyFee: stakes.bountyFee
+    };
 }
 
 export function rowHasGameplayData(row, players) {
     return players.some((player) => row.attendance?.[player.id]);
 }
 
+export function rowHasBuyInSnapshot(row) {
+    return Boolean(row?.stakesLocked);
+}
+
+export function rowHasJackpotFeeSnapshot(row) {
+    return Boolean(row?.stakesLocked);
+}
+
+export function rowHasBountyFeeSnapshot(row) {
+    return Boolean(row?.stakesLocked);
+}
+
+export function rowHasStakesSnapshot(row) {
+    return Boolean(row?.stakesLocked);
+}
+
 export function getRowBuyIn(row, settings) {
-    if (rowHasBuyInSnapshot(row)) {
-        return Number(row.buyIn);
-    }
-    return Number(settings?.buyIn || 0);
+    return getRowStakes(row, settings).buyIn;
 }
 
 export function getRowJackpotFee(row, settings) {
-    if (rowHasJackpotFeeSnapshot(row)) {
-        return Number(row.jackpotFee);
-    }
-    return Number(settings?.jackpot || 0);
+    return getRowStakes(row, settings).jackpotFee;
 }
 
 export function getRowBountyFee(row, settings) {
-    if (rowHasBountyFeeSnapshot(row)) {
-        return Number(row.bountyFee);
-    }
-    return Number(settings?.bounty || 0);
+    return getRowStakes(row, settings).bountyFee;
+}
+
+export function lockRowStakes(row, settings) {
+    const defaults = getDefaultStakes(settings);
+    const stakes = resolveLockedStakes(row, defaults);
+
+    return {
+        ...row,
+        stakesLocked: true,
+        buyIn: stakes.buyIn,
+        jackpotFee: stakes.jackpotFee,
+        bountyFee: stakes.bountyFee
+    };
 }
 
 export function freezeRowStakes(row, settings) {
-    const next = { ...row };
-    if (!rowHasBuyInSnapshot(row)) {
-        next.buyIn = Number(settings?.buyIn || 0);
-    }
-    if (!rowHasJackpotFeeSnapshot(row)) {
-        next.jackpotFee = Number(settings?.jackpot || 0);
-    }
-    if (!rowHasBountyFeeSnapshot(row)) {
-        next.bountyFee = Number(settings?.bounty || 0);
-    }
-    return next;
+    return lockRowStakes(row, settings);
 }
 
 export function withFrozenRowStakes(row, settings, players) {
     if (!rowHasGameplayData(row, players)) {
         return row;
     }
-    return freezeRowStakes(row, settings);
+    return lockRowStakes(row, settings);
+}
+
+function rowShouldLockStakes(row, players) {
+    return (
+        rowHasGameplayData(row, players) ||
+        row.stakesLocked ||
+        row.buyIn != null ||
+        row.jackpotFee != null ||
+        row.bountyFee != null
+    );
 }
 
 export function applyRowStakesSnapshots(rows, settings, players) {
     return rows.map((row) => {
-        if (rowHasGameplayData(row, players)) {
-            return freezeRowStakes(row, settings);
+        if (rowShouldLockStakes(row, players)) {
+            return lockRowStakes(row, settings);
         }
         return row;
     });
 }
 
 export function getRowPrizeBaseAmount(row, settings) {
-    return getRowBuyIn(row, settings) - getRowJackpotFee(row, settings) - getRowBountyFee(row, settings);
+    const { buyIn, jackpotFee, bountyFee } = getRowStakes(row, settings);
+    return buyIn - jackpotFee - bountyFee;
 }
 
 export function getRowKoMoney(row, settings, players) {
@@ -92,6 +140,48 @@ export function getRowKoMoney(row, settings, players) {
     }
     const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
     return ((attendanceCount + rebuyCount) / (attendanceCount - 1)) * getRowBountyFee(row, settings);
+}
+
+function getPlayerRankPoints(row, player, rankPoints) {
+    const rank = row.rank?.[player.id] ?? "NA";
+    if (!row.attendance?.[player.id] || rank === "NA") {
+        return 0;
+    }
+    const rankNumber = Number(String(rank).replace("Top ", ""));
+    return Number(rankPoints?.[rankNumber] ?? 0);
+}
+
+export function computeProfitByRound(rows, players, settings, variant = "jpbt") {
+    const rankPoints = settings?.rankPoints ?? {};
+
+    return Object.fromEntries(
+        (rows ?? []).map((row) => {
+            const baseAmount =
+                variant === "jpbt" ? getRowPrizeBaseAmount(row, settings) : getRowBuyIn(row, settings);
+            const attendeeCount = players.filter((player) => row.attendance?.[player.id]).length;
+            const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
+            const pool = (attendeeCount + rebuyCount) * baseAmount;
+
+            const pointsByPlayer = Object.fromEntries(
+                players.map((player) => [player.id, getPlayerRankPoints(row, player, rankPoints)])
+            );
+            const totalPoints = Object.values(pointsByPlayer).reduce((sum, point) => sum + point, 0);
+
+            const byPlayer = Object.fromEntries(
+                players.map((player) => {
+                    if (!row.attendance?.[player.id]) {
+                        return [player.id, ""];
+                    }
+                    const playerPoints = pointsByPlayer[player.id] ?? 0;
+                    const winAmount = totalPoints > 0 ? (pool * playerPoints) / totalPoints : 0;
+                    const totalCost = baseAmount + (row.rebuys?.[player.id] ? baseAmount : 0);
+                    return [player.id, winAmount - totalCost];
+                })
+            );
+
+            return [row.round, byPlayer];
+        })
+    );
 }
 
 export function sumPlayerBuyIn(rows, playerId, settings) {
@@ -121,7 +211,7 @@ export function sumJackpotContributions(rows, players, settings) {
 }
 
 // Backward-compatible aliases
-export const freezeRowBuyIn = freezeRowStakes;
 export const withFrozenBuyIn = withFrozenRowStakes;
 export const applyRowBuyInSnapshots = applyRowStakesSnapshots;
-export const snapshotRowBuyIn = freezeRowStakes;
+export const snapshotRowBuyIn = lockRowStakes;
+export const freezeRowBuyIn = lockRowStakes;

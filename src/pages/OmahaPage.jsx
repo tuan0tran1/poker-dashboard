@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { applyRowStakesSnapshots, getRowBuyIn, sumPlayerBuyIn, withFrozenRowStakes } from "../utils/roundStakes";
+import { applyRowStakesSnapshots, computeProfitByRound, createLockedRoundStakes, getRowBuyIn, sumPlayerBuyIn, withFrozenRowStakes } from "../utils/roundStakes";
 import { formatCurrency } from "../utils/finance";
 import { isSupabaseConfigured, loadCloudWorkspace, saveCloudWorkspace } from "../lib/cloudWorkspace";
 
@@ -315,44 +315,10 @@ export default function OmahaPage({ players: seedPlayers }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const profitByRound = useMemo(() => {
-        return Object.fromEntries(
-            rows.map((row) => {
-                const baseAmount = getRowBuyIn(row, settings);
-                const attendeeCount = players.filter((player) => row.attendance?.[player.id]).length;
-                const rebuyCount = players.filter((player) => row.rebuys?.[player.id]).length;
-                const pool = (attendeeCount + rebuyCount) * baseAmount;
-
-                const pointsByPlayer = Object.fromEntries(
-                    players.map((player) => {
-                        const rank = row.rank?.[player.id] ?? "NA";
-                        if (!row.attendance?.[player.id] || rank === "NA") {
-                            return [player.id, 0];
-                        }
-                        const rankNumber = Number(rank.replace("Top ", ""));
-                        return [player.id, Number(settings.rankPoints[rankNumber] ?? 0)];
-                    })
-                );
-                const totalPoints = Object.values(pointsByPlayer).reduce((sum, point) => sum + point, 0);
-
-                const byPlayer = Object.fromEntries(
-                    players.map((player) => {
-                        const joinedAttendance = Boolean(row.attendance?.[player.id]);
-                        const joinedRebuy = Boolean(row.rebuys?.[player.id]);
-                        if (!joinedAttendance) {
-                            return [player.id, ""];
-                        }
-                        const playerPoints = pointsByPlayer[player.id] ?? 0;
-                        const winAmount = totalPoints > 0 ? (pool * playerPoints) / totalPoints : 0;
-                        const totalCost = baseAmount + (joinedRebuy ? baseAmount : 0);
-                        return [player.id, winAmount - totalCost];
-                    })
-                );
-
-                return [row.round, byPlayer];
-            })
-        );
-    }, [players, rows, settings, settings.rankPoints]);
+    const profitByRound = useMemo(
+        () => computeProfitByRound(rows, players, settings, "omaha"),
+        [players, rows, settings]
+    );
 
     const dataIssues = useMemo(() => {
         return rows.flatMap((row) => {
@@ -534,7 +500,7 @@ export default function OmahaPage({ players: seedPlayers }) {
             {
                 round: prev.length + 1,
                 date: getTodayDateInputValue(),
-                buyIn: Number(settings.buyIn || 0),
+                ...createLockedRoundStakes(settings),
                 attendance: Object.fromEntries(players.map((player) => [player.id, false])),
                 rebuys: Object.fromEntries(players.map((player) => [player.id, false])),
                 rank: Object.fromEntries(players.map((player) => [player.id, "NA"])),
